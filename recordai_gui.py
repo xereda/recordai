@@ -78,24 +78,34 @@ class RecorderGUI:
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         return os.path.join(self.output_dir, f"{prefix}_{timestamp}.ogg")
 
+    def get_default_source(self):
+        try:
+            result = subprocess.run(['pactl', 'info'], capture_output=True, text=True)
+            if result.returncode == 0:
+                for line in result.stdout.splitlines():
+                    if line.startswith('Fonte padrão:') or line.startswith('Default Source:'):
+                        return line.split(':', 1)[1].strip()
+        except Exception as e:
+            print(f"Erro ao buscar fonte padrão: {e}")
+        return 'default'
+
     def get_default_sink_monitor(self):
         try:
             result = subprocess.run(['pactl', 'info'], capture_output=True, text=True)
             if result.returncode == 0:
                 for line in result.stdout.splitlines():
-                    if line.startswith('Default Sink:'):
-                        sink = line.split(':', 1)[1].strip()
-                        monitor = f"{sink}.monitor"
-                        return monitor
+                    if line.startswith('Sink padrão:') or line.startswith('Default Sink:'):
+                        return line.split(':', 1)[1].strip() + '.monitor'
         except Exception as e:
             print(f"Erro ao buscar sink padrão: {e}")
         return 'default.monitor'
 
-    def build_gst_pipeline(self, monitor_device, filename):
+    def build_gst_pipeline_mix(self, mic_device, monitor_device, filename):
         pipeline_str = (
-            f'pulsesrc device={monitor_device} ! '
-            'audioconvert ! audioresample ! opusenc bitrate=32000 ! oggmux ! '
-            f'filesink location={filename}'
+            f'audiomixer name=mix ! audioconvert ! audioresample ! opusenc bitrate=32000 ! oggmux ! '
+            f'filesink location={filename} '
+            f'pulsesrc device={mic_device} provide-clock=true do-timestamp=true ! audioconvert ! audioresample ! mix. '
+            f'pulsesrc device={monitor_device} provide-clock=true do-timestamp=true ! audioconvert ! audioresample ! mix.'
         )
         return Gst.parse_launch(pipeline_str)
 
@@ -107,8 +117,9 @@ class RecorderGUI:
         self.stop_button.config(state=tk.NORMAL)
         self.status.config(text="Gravando... (clique em Encerrar para finalizar)", fg="#1976D2")
         self.filename = self.get_output_filename()
+        mic_device = self.get_default_source()
         monitor_device = self.get_default_sink_monitor()
-        self.pipeline = self.build_gst_pipeline(monitor_device, self.filename)
+        self.pipeline = self.build_gst_pipeline_mix(mic_device, monitor_device, self.filename)
         self.loop = GLib.MainLoop()
         self.thread = threading.Thread(target=self._run_gst_loop, daemon=True)
         self.thread.start()
@@ -219,6 +230,14 @@ class RecorderGUI:
                 self.status.config(text=f"{len(files)-erros} arquivos excluídos, {erros} erros.", fg="#F44336")
             else:
                 self.status.config(text=f"Todos os arquivos excluídos.", fg="#F44336")
+
+def main():
+    output_dir = "output"
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    filename_mic = os.path.join(output_dir, f"mic_{timestamp}.wav")
+    os.makedirs(output_dir, exist_ok=True)
+    mic_device = get_default_source()
+    run_pipeline(mic_device, filename_mic)
 
 if __name__ == "__main__":
     root = tk.Tk()
