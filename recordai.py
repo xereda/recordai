@@ -23,7 +23,7 @@ class RecorderGUI:
     def __init__(self, master):
         self.master = master
         master.title("RecordAI - Gravação de Áudio do Sistema")
-        master.geometry("600x400")
+        master.geometry("800x520")
         master.resizable(False, False)
         master.configure(bg="#f7f7f7")
 
@@ -35,40 +35,51 @@ class RecorderGUI:
         self.output_dir = "output"
 
         # --- Layout ---
-        self.label = tk.Label(master, text="Grave e gerencie os áudios da saída do sistema.", font=("Arial", 12), bg="#f7f7f7")
-        self.label.pack(pady=(15, 5))
+        self.label = tk.Label(master, text="Grave e gerencie os áudios da saída do sistema.", font=("Arial", 13, "bold"), bg="#f7f7f7")
+        self.label.pack(pady=(18, 10))
 
+        # --- Switches de captação ---
+        switch_frame = tk.Frame(master, bg="#f7f7f7")
+        switch_frame.pack(pady=(0, 10))
+        self.var_mic = tk.BooleanVar(value=True)
+        self.var_out = tk.BooleanVar(value=True)
+        self.check_mic = tk.Checkbutton(switch_frame, text="Gravar microfone (entrada)", variable=self.var_mic, bg="#f7f7f7", font=("Arial", 12, "bold"), padx=10, pady=4)
+        self.check_mic.pack(side=tk.LEFT, padx=10)
+        self.check_out = tk.Checkbutton(switch_frame, text="Gravar saída do sistema", variable=self.var_out, bg="#f7f7f7", font=("Arial", 12, "bold"), padx=10, pady=4)
+        self.check_out.pack(side=tk.LEFT, padx=10)
+
+        # --- Botões principais ---
         btn_frame = tk.Frame(master, bg="#f7f7f7")
-        btn_frame.pack(pady=5)
-        self.start_button = tk.Button(btn_frame, text="Iniciar Gravação", command=self.start_recording, width=18, bg="#4CAF50", fg="white", font=("Arial", 10, "bold"))
-        self.start_button.grid(row=0, column=0, padx=5)
-        self.stop_button = tk.Button(btn_frame, text="Encerrar Gravação", command=self.stop_recording, width=18, bg="#F44336", fg="white", font=("Arial", 10, "bold"), state=tk.DISABLED)
-        self.stop_button.grid(row=0, column=1, padx=5)
-        self.refresh_button = tk.Button(btn_frame, text="Atualizar Lista", command=self.refresh_files, width=15, font=("Arial", 10))
-        self.refresh_button.grid(row=0, column=2, padx=5)
+        btn_frame.pack(pady=(0, 8))
+        self.start_button = tk.Button(btn_frame, text="Iniciar Gravação", command=self.start_recording, width=15, height=1, bg="#4CAF50", fg="white", font=("Arial", 11, "bold"), relief=tk.RAISED, bd=2)
+        self.start_button.grid(row=0, column=0, padx=8, pady=2, ipady=2)
+        self.stop_button = tk.Button(btn_frame, text="Encerrar Gravação", command=self.stop_recording, width=15, height=1, bg="#F44336", fg="white", font=("Arial", 11, "bold"), state=tk.DISABLED, relief=tk.RAISED, bd=2)
+        self.stop_button.grid(row=0, column=1, padx=8, pady=2, ipady=2)
+        self.refresh_button = tk.Button(btn_frame, text="Atualizar Lista", command=self.refresh_files, width=12, height=1, font=("Arial", 10), relief=tk.RAISED, bd=2)
+        self.refresh_button.grid(row=0, column=2, padx=8, pady=2, ipady=2)
 
         # --- Tabela de arquivos ---
-        self.tree = ttk.Treeview(master, columns=("#1", "#2"), show="headings", height=10)
+        self.tree = ttk.Treeview(master, columns=("#1", "#2"), show="headings", height=12)
         self.tree.heading("#1", text="Arquivo")
         self.tree.heading("#2", text="Data/Hora")
-        self.tree.column("#1", width=320)
-        self.tree.column("#2", width=180)
+        self.tree.column("#1", width=420)
+        self.tree.column("#2", width=220)
         self.tree.pack(pady=10)
         self.tree.bind('<Double-1>', self.open_file)
 
         # --- Botões de ação ---
         action_frame = tk.Frame(master, bg="#f7f7f7")
-        action_frame.pack(pady=5)
-        self.play_button = tk.Button(action_frame, text="Reproduzir", command=self.play_file, width=15, font=("Arial", 10))
-        self.play_button.grid(row=0, column=0, padx=5)
-        self.delete_button = tk.Button(action_frame, text="Excluir", command=self.delete_file, width=15, font=("Arial", 10))
-        self.delete_button.grid(row=0, column=1, padx=5)
-        self.open_folder_button = tk.Button(action_frame, text="Abrir Pasta", command=self.open_folder, width=15, font=("Arial", 10))
-        self.open_folder_button.grid(row=0, column=2, padx=5)
-        self.delete_all_button = tk.Button(action_frame, text="Excluir Todos", command=self.delete_all_files, width=15, font=("Arial", 10))
-        self.delete_all_button.grid(row=0, column=3, padx=5)
+        action_frame.pack(pady=(5, 10))
+        self.play_button = tk.Button(action_frame, text="Reproduzir", command=self.play_file, width=12, height=1, font=("Arial", 10), relief=tk.RAISED, bd=2)
+        self.play_button.grid(row=0, column=0, padx=6, pady=2, ipady=2)
+        self.delete_button = tk.Button(action_frame, text="Excluir", command=self.delete_file, width=12, height=1, font=("Arial", 10), relief=tk.RAISED, bd=2)
+        self.delete_button.grid(row=0, column=1, padx=6, pady=2, ipady=2)
+        self.open_folder_button = tk.Button(action_frame, text="Abrir Pasta", command=self.open_folder, width=12, height=1, font=("Arial", 10), relief=tk.RAISED, bd=2)
+        self.open_folder_button.grid(row=0, column=2, padx=6, pady=2, ipady=2)
+        self.delete_all_button = tk.Button(action_frame, text="Excluir Todos", command=self.delete_all_files, width=12, height=1, font=("Arial", 10), relief=tk.RAISED, bd=2)
+        self.delete_all_button.grid(row=0, column=3, padx=6, pady=2, ipady=2)
 
-        self.status = tk.Label(master, text="", font=("Arial", 10), bg="#f7f7f7", fg="#555")
+        self.status = tk.Label(master, text="", font=("Arial", 11), bg="#f7f7f7", fg="#555")
         self.status.pack(pady=(5, 0))
 
         self.refresh_files()
@@ -100,13 +111,14 @@ class RecorderGUI:
             print(f"Erro ao buscar sink padrão: {e}")
         return 'default.monitor'
 
-    def build_gst_pipeline_mix(self, mic_device, monitor_device, filename):
-        pipeline_str = (
-            f'audiomixer name=mix ! audioconvert ! audioresample ! opusenc bitrate=32000 ! oggmux ! '
-            f'filesink location={filename} '
-            f'pulsesrc device={mic_device} provide-clock=true do-timestamp=true ! audioconvert ! audioresample ! mix. '
-            f'pulsesrc device={monitor_device} provide-clock=true do-timestamp=true ! audioconvert ! audioresample ! mix.'
-        )
+    def build_gst_pipeline_mix(self, mic_device, monitor_device, filename, use_mic=True, use_out=True):
+        elements = []
+        elements.append('audiomixer name=mix ! audioconvert ! audioresample ! opusenc bitrate=32000 ! oggmux ! filesink location={}'.format(filename))
+        if use_mic:
+            elements.append('pulsesrc device={} provide-clock=true do-timestamp=true ! audioconvert ! audioresample ! mix.'.format(mic_device))
+        if use_out:
+            elements.append('pulsesrc device={} provide-clock=true do-timestamp=true ! audioconvert ! audioresample ! mix.'.format(monitor_device))
+        pipeline_str = ' '.join(elements)
         return Gst.parse_launch(pipeline_str)
 
     def start_recording(self):
@@ -119,7 +131,15 @@ class RecorderGUI:
         self.filename = self.get_output_filename()
         mic_device = self.get_default_source()
         monitor_device = self.get_default_sink_monitor()
-        self.pipeline = self.build_gst_pipeline_mix(mic_device, monitor_device, self.filename)
+        use_mic = self.var_mic.get()
+        use_out = self.var_out.get()
+        if not use_mic and not use_out:
+            self.status.config(text="Selecione pelo menos uma fonte para gravar.", fg="#F44336")
+            self.is_recording = False
+            self.start_button.config(state=tk.NORMAL)
+            self.stop_button.config(state=tk.DISABLED)
+            return
+        self.pipeline = self.build_gst_pipeline_mix(mic_device, monitor_device, self.filename, use_mic, use_out)
         self.loop = GLib.MainLoop()
         self.thread = threading.Thread(target=self._run_gst_loop, daemon=True)
         self.thread.start()
