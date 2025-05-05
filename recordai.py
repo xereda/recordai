@@ -43,9 +43,9 @@ class RecorderGUI:
         switch_frame.pack(pady=(0, 10))
         self.var_mic = tk.BooleanVar(value=True)
         self.var_out = tk.BooleanVar(value=True)
-        self.check_mic = tk.Checkbutton(switch_frame, text="Gravar microfone (entrada)", variable=self.var_mic, bg="#f7f7f7", font=("Arial", 12, "bold"), padx=10, pady=4)
+        self.check_mic = tk.Checkbutton(switch_frame, text="Gravar microfone (entrada)", variable=self.var_mic, bg="#f7f7f7", font=("Arial", 12, "bold"), padx=10, pady=4, command=self.update_start_button_state)
         self.check_mic.pack(side=tk.LEFT, padx=10)
-        self.check_out = tk.Checkbutton(switch_frame, text="Gravar saída do sistema", variable=self.var_out, bg="#f7f7f7", font=("Arial", 12, "bold"), padx=10, pady=4)
+        self.check_out = tk.Checkbutton(switch_frame, text="Gravar saída do sistema", variable=self.var_out, bg="#f7f7f7", font=("Arial", 12, "bold"), padx=10, pady=4, command=self.update_start_button_state)
         self.check_out.pack(side=tk.LEFT, padx=10)
 
         # --- Botões principais ---
@@ -81,6 +81,10 @@ class RecorderGUI:
 
         self.status = tk.Label(master, text="", font=("Arial", 11), bg="#f7f7f7", fg="#555")
         self.status.pack(pady=(5, 0))
+
+        # Tooltip para o botão de iniciar gravação
+        self.start_btn_tooltip = None
+        self.update_start_button_state()
 
         self.refresh_files()
 
@@ -121,6 +125,41 @@ class RecorderGUI:
         pipeline_str = ' '.join(elements)
         return Gst.parse_launch(pipeline_str)
 
+    def update_start_button_state(self):
+        use_mic = self.var_mic.get()
+        use_out = self.var_out.get()
+        if not use_mic and not use_out:
+            self.start_button.config(state=tk.DISABLED)
+            self.add_start_btn_tooltip("Selecione pelo menos uma fonte para gravar (microfone ou saída do sistema)")
+        else:
+            self.start_button.config(state=tk.NORMAL)
+            self.remove_start_btn_tooltip()
+
+    def add_start_btn_tooltip(self, text):
+        if self.start_btn_tooltip:
+            return
+        def show_tooltip(event):
+            x = self.start_button.winfo_rootx() + self.start_button.winfo_width() // 2
+            y = self.start_button.winfo_rooty() + self.start_button.winfo_height() + 8
+            self.start_btn_tooltip = tw = tk.Toplevel(self.start_button)
+            tw.wm_overrideredirect(True)
+            tw.wm_geometry(f"+{x}+{y}")
+            label = tk.Label(tw, text=text, background="#ffffe0", relief=tk.SOLID, borderwidth=1, font=("Arial", 10))
+            label.pack(ipadx=6, ipady=2)
+        def hide_tooltip(event):
+            if self.start_btn_tooltip:
+                self.start_btn_tooltip.destroy()
+                self.start_btn_tooltip = None
+        self.start_button.bind("<Enter>", show_tooltip)
+        self.start_button.bind("<Leave>", hide_tooltip)
+
+    def remove_start_btn_tooltip(self):
+        self.start_button.unbind("<Enter>")
+        self.start_button.unbind("<Leave>")
+        if self.start_btn_tooltip:
+            self.start_btn_tooltip.destroy()
+            self.start_btn_tooltip = None
+
     def start_recording(self):
         if self.is_recording:
             return
@@ -135,6 +174,8 @@ class RecorderGUI:
         use_out = self.var_out.get()
         if not use_mic and not use_out:
             self.status.config(text="Selecione pelo menos uma fonte para gravar.", fg="#F44336")
+            self.update_start_button_state()
+            return
             self.is_recording = False
             self.start_button.config(state=tk.NORMAL)
             self.stop_button.config(state=tk.DISABLED)
