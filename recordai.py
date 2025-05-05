@@ -9,6 +9,12 @@ from tkinter import messagebox, ttk
 import sys
 import platform
 import webbrowser
+from pydub import AudioSegment
+import speech_recognition as sr
+import google.generativeai as genai
+from dotenv import load_dotenv
+import json
+import re
 
 if sys.version_info < (3, 6):
     print("Python 3.6+ é necessário.")
@@ -19,11 +25,18 @@ from gi.repository import Gst, GLib
 
 Gst.init(None)
 
+# Carrega variáveis do .env
+load_dotenv()
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
+GEMINI_MODEL = os.getenv('GEMINI_MODEL')
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+
 class RecorderGUI:
     def __init__(self, master):
         self.master = master
         master.title("RecordAI - Gravação de Áudio do Sistema")
-        master.geometry("800x520")
+        master.geometry("1120x520")
         master.resizable(False, False)
         master.configure(bg="#f7f7f7")
 
@@ -36,11 +49,11 @@ class RecorderGUI:
 
         # --- Layout ---
         self.label = tk.Label(master, text="Grave e gerencie os áudios da saída do sistema.", font=("Arial", 13, "bold"), bg="#f7f7f7")
-        self.label.pack(pady=(18, 10))
+        self.label.pack(pady=(18, 10), fill='x')
 
         # --- Switches de captação ---
         switch_frame = tk.Frame(master, bg="#f7f7f7")
-        switch_frame.pack(pady=(0, 10))
+        switch_frame.pack(pady=(0, 10), fill='x')
         self.var_mic = tk.BooleanVar(value=True)
         self.var_out = tk.BooleanVar(value=True)
         self.check_mic = tk.Checkbutton(switch_frame, text="Gravar microfone (entrada)", variable=self.var_mic, bg="#f7f7f7", font=("Arial", 12, "bold"), padx=10, pady=4, command=self.update_start_button_state)
@@ -50,7 +63,7 @@ class RecorderGUI:
 
         # --- Botões principais ---
         btn_frame = tk.Frame(master, bg="#f7f7f7")
-        btn_frame.pack(pady=(0, 8))
+        btn_frame.pack(pady=(0, 8), fill='x')
         self.start_button = tk.Button(btn_frame, text="Iniciar Gravação", command=self.start_recording, width=15, height=1, bg="#4CAF50", fg="white", font=("Arial", 11, "bold"), relief=tk.RAISED, bd=2)
         self.start_button.grid(row=0, column=0, padx=8, pady=2, ipady=2)
         self.stop_button = tk.Button(btn_frame, text="Encerrar Gravação", command=self.stop_recording, width=15, height=1, bg="#F44336", fg="white", font=("Arial", 11, "bold"), state=tk.DISABLED, relief=tk.RAISED, bd=2)
@@ -59,24 +72,22 @@ class RecorderGUI:
         self.refresh_button.grid(row=0, column=2, padx=8, pady=2, ipady=2)
 
         # --- Tabela de arquivos ---
-        self.tree = ttk.Treeview(master, columns=("#1", "#2", "#3", "#4"), show="headings", height=12)
-        self.tree.heading("#1", text="Arquivo")
-        self.tree.heading("#2", text="Data/Hora")
-        self.tree.heading("#3", text="")
-        self.tree.heading("#4", text="")
-        self.tree.column("#1", width=320)
-        self.tree.column("#2", width=160)
-        self.tree.column("#3", width=110, anchor="center")
-        self.tree.column("#4", width=110, anchor="center")
-        self.tree.pack(pady=10)
+        self.tree = ttk.Treeview(master, columns=("titulo", "arquivo", "datahora", "detalhes"), show="headings", height=12)
+        self.tree.heading("titulo", text="Título")
+        self.tree.heading("arquivo", text="Arquivo")
+        self.tree.heading("datahora", text="Data/Hora")
+        self.tree.heading("detalhes", text="Detalhes")
+        self.tree.column("titulo", width=320)
+        self.tree.column("arquivo", width=500)
+        self.tree.column("datahora", width=200)
+        self.tree.column("detalhes", width=100, anchor="center")
+        self.tree.pack(pady=10, fill='x', expand=True)
         self.tree.bind('<Double-1>', self.open_file)
-        self.tree.bind('<Button-1>', self.on_tree_click)
-        self.tree.bind('<Motion>', self.on_tree_motion)
-        self.tree.tag_configure('actionlink', foreground='#1976D2', font=("Arial", 10, "bold", "underline"))
+        self.tree.bind('<Button-1>', self.on_tree_click_detalhes)
 
         # --- Botões de ação ---
         action_frame = tk.Frame(master, bg="#f7f7f7")
-        action_frame.pack(pady=(5, 10))
+        action_frame.pack(pady=(5, 10), fill='x')
         self.play_button = tk.Button(action_frame, text="Reproduzir", command=self.play_file, width=12, height=1, font=("Arial", 10), relief=tk.RAISED, bd=2)
         self.play_button.grid(row=0, column=0, padx=6, pady=2, ipady=2)
         self.delete_button = tk.Button(action_frame, text="Excluir", command=self.delete_file, width=12, height=1, font=("Arial", 10), relief=tk.RAISED, bd=2)
@@ -85,6 +96,10 @@ class RecorderGUI:
         self.open_folder_button.grid(row=0, column=2, padx=6, pady=2, ipady=2)
         self.delete_all_button = tk.Button(action_frame, text="Excluir Todos", command=self.delete_all_files, width=12, height=1, font=("Arial", 10), relief=tk.RAISED, bd=2)
         self.delete_all_button.grid(row=0, column=3, padx=6, pady=2, ipady=2)
+        self.transcrever_button = tk.Button(action_frame, text="Transcrever", command=self.transcrever_selecionado, width=12, height=1, font=("Arial", 10), relief=tk.RAISED, bd=2, bg="#1976D2", fg="white")
+        self.transcrever_button.grid(row=0, column=4, padx=6, pady=2, ipady=2)
+        self.ia_button = tk.Button(action_frame, text="Aplicar IA", command=self.aplicar_ia_selecionado, width=12, height=1, font=("Arial", 10), relief=tk.RAISED, bd=2, bg="#388E3C", fg="white")
+        self.ia_button.grid(row=0, column=5, padx=6, pady=2, ipady=2)
 
         self.status = tk.Label(master, text="", font=("Arial", 11), bg="#f7f7f7", fg="#555")
         self.status.pack(pady=(5, 0))
@@ -224,16 +239,24 @@ class RecorderGUI:
         for idx, f in enumerate(files):
             path = os.path.join(self.output_dir, f)
             dt = datetime.fromtimestamp(os.path.getmtime(path)).strftime('%d/%m/%Y %H:%M:%S')
-            iid = self.tree.insert('', 'end', values=(f, dt, '[Transcrever]', '[Aplicar IA]'))
-            # Aplicar tag de link nas colunas de ação
-            self.tree.item(iid, tags=('actionlink',))
+            nome_base = os.path.splitext(f)[0]
+            caminho_db = os.path.join(self.output_dir, f"{nome_base}_ia.json")
+            titulo = ""
+            if os.path.exists(caminho_db):
+                try:
+                    with open(caminho_db, 'r', encoding='utf-8') as j:
+                        dados_ia = json.load(j)
+                        titulo = dados_ia.get('titulo', "")
+                except Exception:
+                    titulo = ""
+            self.tree.insert('', 'end', values=(titulo, f, dt, 'detalhes'))
 
     def get_selected_file(self):
         sel = self.tree.selection()
         if not sel:
             messagebox.showwarning("Seleção", "Selecione um arquivo na lista.")
             return None
-        return self.tree.item(sel[0])['values'][0]
+        return self.tree.item(sel[0])['values'][1]
 
     def play_file(self):
         f = self.get_selected_file()
@@ -312,12 +335,14 @@ class RecorderGUI:
         values = self.tree.item(row_id)['values']
         if not values:
             return
-        arquivo = values[0]
+        arquivo = values[1]
         idx = self.tree.index(row_id)
         if col == '#3':
-            print(f"[AÇÃO] Transcrever: {arquivo} (id: {idx})")
+            # Chama a transcrição ao clicar em '[Transcrever]'
+            self.iniciar_transcricao_thread(arquivo)
         elif col == '#4':
-            print(f"[AÇÃO] Aplicar IA: {arquivo} (id: {idx})")
+            # Abre a tela de detalhes
+            self.abrir_detalhes_gravacao(arquivo)
 
     def on_tree_motion(self, event):
         row_id = self.tree.identify_row(event.y)
@@ -326,6 +351,225 @@ class RecorderGUI:
             self.tree.config(cursor='hand2')
         else:
             self.tree.config(cursor='')
+
+    def iniciar_transcricao_thread(self, arquivo):
+        # Desabilita botões e mostra status
+        self.status.config(text="Transcrevendo...", fg="#1976D2")
+        self.start_button.config(state=tk.DISABLED)
+        self.stop_button.config(state=tk.DISABLED)
+        self.play_button.config(state=tk.DISABLED)
+        self.delete_button.config(state=tk.DISABLED)
+        self.open_folder_button.config(state=tk.DISABLED)
+        self.delete_all_button.config(state=tk.DISABLED)
+        self.refresh_button.config(state=tk.DISABLED)
+        # Desabilita o clique na treeview
+        self.tree.unbind('<Button-1>')
+        t = threading.Thread(target=self.transcrever_audio, args=(arquivo,), daemon=True)
+        t.start()
+
+    def transcrever_audio(self, arquivo):
+        """
+        Converte o arquivo .ogg para .wav, transcreve o áudio usando SpeechRecognition (Google),
+        salva a transcrição em .txt e remove o .wav após o processo.
+        """
+        try:
+            caminho_ogg = os.path.join(self.output_dir, arquivo)
+            nome_base = os.path.splitext(arquivo)[0]
+            caminho_wav = os.path.join(self.output_dir, f"{nome_base}.wav")
+            caminho_txt = os.path.join(self.output_dir, f"{nome_base}.txt")
+            # Converte OGG para WAV
+            audio = AudioSegment.from_file(caminho_ogg, format="ogg")
+            audio = audio.normalize()
+            audio.export(caminho_wav, format="wav")
+            # Transcreve o áudio
+            recognizer = sr.Recognizer()
+            with sr.AudioFile(caminho_wav) as source:
+                audio_data = recognizer.record(source)
+                texto = recognizer.recognize_google(audio_data, language='pt-BR')
+            # Salva a transcrição em arquivo txt
+            with open(caminho_txt, 'w', encoding='utf-8') as f:
+                f.write(texto)
+            # Apenas avisa que a transcrição foi finalizada
+            self.master.after(0, lambda: messagebox.showinfo("Transcrição", "Transcrição finalizada com sucesso!"))
+        except sr.UnknownValueError:
+            self.master.after(0, lambda: messagebox.showwarning("Transcrição", "Não foi possível entender o áudio."))
+        except Exception as e:
+            self.master.after(0, lambda: messagebox.showerror("Erro na Transcrição", f"Erro ao transcrever: {e}"))
+        finally:
+            # Remove o arquivo wav temporário
+            if os.path.exists(caminho_wav):
+                try:
+                    os.remove(caminho_wav)
+                except Exception:
+                    pass
+            # Reabilita botões e limpa status
+            self.master.after(0, self.finalizar_transcricao_feedback)
+
+    def finalizar_transcricao_feedback(self):
+        self.status.config(text="", fg="#555")
+        self.start_button.config(state=tk.NORMAL)
+        self.stop_button.config(state=tk.NORMAL)
+        self.play_button.config(state=tk.NORMAL)
+        self.delete_button.config(state=tk.NORMAL)
+        self.open_folder_button.config(state=tk.NORMAL)
+        self.delete_all_button.config(state=tk.NORMAL)
+        self.refresh_button.config(state=tk.NORMAL)
+        # Reabilita o clique na treeview
+        self.tree.bind('<Button-1>', self.on_tree_click)
+        self.refresh_files()
+
+    def abrir_detalhes_gravacao(self, arquivo):
+        """
+        Abre uma janela com detalhes da gravação: data, título (IA), transcrição, resumo e principais pontos (IA).
+        """
+        nome_base = os.path.splitext(arquivo)[0]
+        caminho_ogg = os.path.join(self.output_dir, arquivo)
+        caminho_txt = os.path.join(self.output_dir, f"{nome_base}.txt")
+        caminho_db = os.path.join(self.output_dir, f"{nome_base}_ia.json")
+        data = datetime.fromtimestamp(os.path.getmtime(caminho_ogg)).strftime('%d/%m/%Y %H:%M:%S')
+        # Lê a transcrição se existir
+        if os.path.exists(caminho_txt):
+            with open(caminho_txt, 'r', encoding='utf-8') as f:
+                transcricao = f.read()
+        else:
+            transcricao = '(Nenhuma transcrição disponível)'
+        # Lê IA se existir
+        titulo_ia = '(A ser determinado por IA)'
+        resumo_ia = '(A ser gerado por IA)'
+        pontos_ia = '(A ser gerado por IA)'
+        if os.path.exists(caminho_db):
+            with open(caminho_db, 'r', encoding='utf-8') as f:
+                try:
+                    dados_ia = json.load(f)
+                    titulo_ia = dados_ia.get('titulo', titulo_ia)
+                    resumo_ia = dados_ia.get('resumo', resumo_ia)
+                    pontos_ia = dados_ia.get('pontos', pontos_ia)
+                    # Garante que pontos_ia seja uma lista
+                    if isinstance(pontos_ia, list):
+                        pontos_ia_lista = pontos_ia
+                    else:
+                        pontos_ia_lista = [str(pontos_ia)]
+                except Exception:
+                    pontos_ia_lista = [str(pontos_ia)]
+        else:
+            pontos_ia_lista = [str(pontos_ia)]
+        # Cria a janela de detalhes
+        detalhes = tk.Toplevel(self.master)
+        detalhes.title(f"Detalhes da Gravação: {arquivo}")
+        detalhes.geometry("780x650")  # 30% maior que 600x500
+        detalhes.configure(bg="#f7f7f7")
+        # Data
+        tk.Label(detalhes, text=f"Data/Hora: {data}", font=("Arial", 11, "bold"), bg="#f7f7f7").pack(anchor='w', padx=16, pady=(16, 4))
+        # Título (IA)
+        tk.Label(detalhes, text="Título:", font=("Arial", 11, "bold"), bg="#f7f7f7").pack(anchor='w', padx=16, pady=(8, 0))
+        self.titulo_var = tk.StringVar(value=titulo_ia)
+        tk.Entry(detalhes, textvariable=self.titulo_var, font=("Arial", 11), width=60, state='readonly').pack(anchor='w', padx=16, pady=(0, 8))
+        # Transcrição
+        tk.Label(detalhes, text="Transcrição:", font=("Arial", 11, "bold"), bg="#f7f7f7").pack(anchor='w', padx=16, pady=(8, 0))
+        txt_transc = tk.Text(detalhes, font=("Arial", 10), height=10, wrap='word')
+        txt_transc.pack(fill='both', expand=False, padx=16, pady=(0, 8))
+        txt_transc.insert('1.0', transcricao)
+        txt_transc.config(state='disabled')
+        # Resumo (IA) como textarea
+        tk.Label(detalhes, text="Resumo:", font=("Arial", 11, "bold"), bg="#f7f7f7").pack(anchor='w', padx=16, pady=(8, 0))
+        txt_resumo = tk.Text(detalhes, font=("Arial", 10), height=6, wrap='word')
+        txt_resumo.pack(fill='both', expand=False, padx=16, pady=(0, 8))
+        txt_resumo.insert('1.0', resumo_ia)
+        txt_resumo.config(state='disabled')
+        # Principais pontos (IA) como lista
+        tk.Label(detalhes, text="Principais Pontos:", font=("Arial", 11, "bold"), bg="#f7f7f7").pack(anchor='w', padx=16, pady=(8, 0))
+        txt_pontos = tk.Text(detalhes, font=("Arial", 10), height=8, wrap='word')
+        txt_pontos.pack(fill='both', expand=False, padx=16, pady=(0, 16))
+        txt_pontos.insert('1.0', '\n'.join(f'- {item}' for item in pontos_ia_lista))
+        txt_pontos.config(state='disabled')
+
+    def transcrever_selecionado(self):
+        arquivo = self.get_selected_file()
+        if not arquivo:
+            messagebox.showwarning("Seleção", "Selecione um arquivo na lista para transcrever.")
+            return
+        self.iniciar_transcricao_thread(arquivo)
+
+    def aplicar_ia_selecionado(self):
+        arquivo = self.get_selected_file()
+        if not arquivo:
+            messagebox.showwarning("Seleção", "Selecione um arquivo na lista para aplicar IA.")
+            return
+        self.status.config(text="Processando IA...", fg="#1976D2")
+        self.ia_button.config(state=tk.DISABLED)
+        t = threading.Thread(target=self.processar_ia_gemini, args=(arquivo,), daemon=True)
+        t.start()
+
+    def processar_ia_gemini(self, arquivo):
+        try:
+            nome_base = os.path.splitext(arquivo)[0]
+            caminho_txt = os.path.join(self.output_dir, f"{nome_base}.txt")
+            caminho_db = os.path.join(self.output_dir, f"{nome_base}_ia.json")
+            # Lê a transcrição
+            if not os.path.exists(caminho_txt):
+                self.master.after(0, lambda: messagebox.showwarning("IA", "Transcrição não encontrada para esta gravação."))
+                return
+            with open(caminho_txt, 'r', encoding='utf-8') as f:
+                transcricao = f.read()
+            # Monta o prompt pedindo JSON puro, sem markdown
+            prompt = (
+                "Você receberá a transcrição de uma reunião em português do Brasil. "
+                "Gere um título objetivo para a reunião, um resumo de até 5 linhas e elenque os principais pontos discutidos (em tópicos).\n"
+                "Retorne a resposta exclusivamente no seguinte formato JSON, sem comentários, sem blocos de código markdown (como ```json), sem texto extra antes ou depois, apenas o JSON puro:\n"
+                '{\n  "titulo": "...",\n  "resumo": "...",\n  "pontos": [\n    "...",\n    "..."\n  ]\n}\n'
+                "Transcrição:\n" + transcricao
+            )
+            model = genai.GenerativeModel(GEMINI_MODEL)
+            response = model.generate_content(prompt)
+            resposta = response.text.strip()
+            # Limpa blocos de markdown se vierem
+            resposta_limpa = re.sub(r"^```[a-zA-Z]*\n?|```$", "", resposta, flags=re.MULTILINE).strip()
+            # Tenta fazer o parser do JSON retornado
+            try:
+                dados_ia = json.loads(resposta_limpa)
+                titulo = dados_ia.get('titulo', '')
+                resumo = dados_ia.get('resumo', '')
+                pontos = dados_ia.get('pontos', [])
+                if isinstance(pontos, list):
+                    pontos_str = '\n'.join(pontos)
+                else:
+                    pontos_str = str(pontos)
+            except Exception as e:
+                self.master.after(0, lambda: messagebox.showerror("Erro IA", f"A resposta da IA não está em formato JSON válido.\n\nResposta:\n{resposta}"))
+                return
+            # Salva no banco de dados json
+            with open(caminho_db, 'w', encoding='utf-8') as f:
+                json.dump({"titulo": titulo, "resumo": resumo, "pontos": pontos}, f, ensure_ascii=False, indent=2)
+            # Atualiza a grid e modal
+            self.master.after(0, lambda: self.atualizar_titulo_grid(arquivo, titulo))
+            self.master.after(0, lambda: messagebox.showinfo("IA", "Resumo, título e pontos principais gerados com sucesso!"))
+        except Exception as e:
+            self.master.after(0, lambda: messagebox.showerror("Erro IA", f"Erro ao processar IA: {e}"))
+        finally:
+            self.master.after(0, lambda: self.ia_button.config(state=tk.NORMAL))
+            self.master.after(0, lambda: self.status.config(text="", fg="#555"))
+
+    def atualizar_titulo_grid(self, arquivo, titulo):
+        # Atualiza o título na grid para a linha correspondente ao arquivo
+        for row in self.tree.get_children():
+            values = self.tree.item(row)['values']
+            if values[1] == arquivo:
+                self.tree.set(row, 'titulo', titulo)
+                break
+
+    def on_tree_click_detalhes(self, event):
+        region = self.tree.identify('region', event.x, event.y)
+        if region != 'cell':
+            return
+        row_id = self.tree.identify_row(event.y)
+        col = self.tree.identify_column(event.x)
+        if not row_id or col != '#4':
+            return
+        values = self.tree.item(row_id)['values']
+        if not values:
+            return
+        arquivo = values[1]
+        self.abrir_detalhes_gravacao(arquivo)
 
 def main():
     output_dir = "output"
