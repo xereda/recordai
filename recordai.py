@@ -71,6 +71,8 @@ class RecorderGUI:
         self.tree.pack(pady=10)
         self.tree.bind('<Double-1>', self.open_file)
         self.tree.bind('<Button-1>', self.on_tree_click)
+        self.tree.bind('<Motion>', self.on_tree_motion)
+        self.tree.tag_configure('actionlink', foreground='#1976D2', font=("Arial", 10, "bold", "underline"))
 
         # --- Botões de ação ---
         action_frame = tk.Frame(master, bg="#f7f7f7")
@@ -222,7 +224,9 @@ class RecorderGUI:
         for idx, f in enumerate(files):
             path = os.path.join(self.output_dir, f)
             dt = datetime.fromtimestamp(os.path.getmtime(path)).strftime('%d/%m/%Y %H:%M:%S')
-            self.tree.insert('', 'end', values=(f, dt, '[Transcrever]', '[Aplicar IA]'))
+            iid = self.tree.insert('', 'end', values=(f, dt, '[Transcrever]', '[Aplicar IA]'))
+            # Aplicar tag de link nas colunas de ação
+            self.tree.item(iid, tags=('actionlink',))
 
     def get_selected_file(self):
         sel = self.tree.selection()
@@ -314,6 +318,14 @@ class RecorderGUI:
             print(f"[AÇÃO] Transcrever: {arquivo} (id: {idx})")
         elif col == '#4':
             print(f"[AÇÃO] Aplicar IA: {arquivo} (id: {idx})")
+
+    def on_tree_motion(self, event):
+        row_id = self.tree.identify_row(event.y)
+        col = self.tree.identify_column(event.x)
+        if col in ('#3', '#4') and row_id:
+            self.tree.config(cursor='hand2')
+        else:
+            self.tree.config(cursor='')
 
 def main():
     output_dir = "output"
