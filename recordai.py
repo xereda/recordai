@@ -59,13 +59,18 @@ class RecorderGUI:
         self.refresh_button.grid(row=0, column=2, padx=8, pady=2, ipady=2)
 
         # --- Tabela de arquivos ---
-        self.tree = ttk.Treeview(master, columns=("#1", "#2"), show="headings", height=12)
+        self.tree = ttk.Treeview(master, columns=("#1", "#2", "#3", "#4"), show="headings", height=12)
         self.tree.heading("#1", text="Arquivo")
         self.tree.heading("#2", text="Data/Hora")
-        self.tree.column("#1", width=420)
-        self.tree.column("#2", width=220)
+        self.tree.heading("#3", text="")
+        self.tree.heading("#4", text="")
+        self.tree.column("#1", width=320)
+        self.tree.column("#2", width=160)
+        self.tree.column("#3", width=110, anchor="center")
+        self.tree.column("#4", width=110, anchor="center")
         self.tree.pack(pady=10)
         self.tree.bind('<Double-1>', self.open_file)
+        self.tree.bind('<Button-1>', self.on_tree_click)
 
         # --- Botões de ação ---
         action_frame = tk.Frame(master, bg="#f7f7f7")
@@ -214,10 +219,43 @@ class RecorderGUI:
             return
         files = [f for f in os.listdir(self.output_dir) if f.endswith('.ogg')]
         files.sort(reverse=True)
-        for f in files:
+        for idx, f in enumerate(files):
             path = os.path.join(self.output_dir, f)
             dt = datetime.fromtimestamp(os.path.getmtime(path)).strftime('%d/%m/%Y %H:%M:%S')
-            self.tree.insert('', 'end', values=(f, dt))
+            self.tree.insert('', 'end', values=(f, dt, '[Transcrever]', '[Aplicar IA]'))
+        self.add_action_buttons()
+
+    def add_action_buttons(self):
+        # Remove botões antigos
+        if hasattr(self, 'action_buttons'):
+            for btn in self.action_buttons:
+                btn.destroy()
+        self.action_buttons = []
+        for i, item in enumerate(self.tree.get_children()):
+            bbox3 = self.tree.bbox(item, column='#3')
+            bbox4 = self.tree.bbox(item, column='#4')
+            if not bbox3 or not bbox4:
+                self.tree.update_idletasks()
+                bbox3 = self.tree.bbox(item, column='#3')
+                bbox4 = self.tree.bbox(item, column='#4')
+            if bbox3:
+                btn1 = tk.Button(self.tree, text="Transcrever", width=10, height=1, font=("Arial", 9), command=lambda iid=item: self.transcrever_arquivo(iid))
+                btn1.place(x=bbox3[0]+self.tree.winfo_x(), y=bbox3[1]+self.tree.winfo_y(), width=bbox3[2], height=bbox3[3])
+                self.action_buttons.append(btn1)
+            if bbox4:
+                btn2 = tk.Button(self.tree, text="Aplicar IA", width=10, height=1, font=("Arial", 9), command=lambda iid=item: self.aplicar_ia_arquivo(iid))
+                btn2.place(x=bbox4[0]+self.tree.winfo_x(), y=bbox4[1]+self.tree.winfo_y(), width=bbox4[2], height=bbox4[3])
+                self.action_buttons.append(btn2)
+
+    def transcrever_arquivo(self, iid):
+        values = self.tree.item(iid)['values']
+        if values:
+            print(f"[AÇÃO] Transcrever: {values[0]}")
+
+    def aplicar_ia_arquivo(self, iid):
+        values = self.tree.item(iid)['values']
+        if values:
+            print(f"[AÇÃO] Aplicar IA: {values[0]}")
 
     def get_selected_file(self):
         sel = self.tree.selection()
@@ -291,6 +329,24 @@ class RecorderGUI:
                 self.status.config(text=f"{len(files)-erros} arquivos excluídos, {erros} erros.", fg="#F44336")
             else:
                 self.status.config(text=f"Todos os arquivos excluídos.", fg="#F44336")
+
+    def on_tree_click(self, event):
+        region = self.tree.identify('region', event.x, event.y)
+        if region != 'cell':
+            return
+        row_id = self.tree.identify_row(event.y)
+        col = self.tree.identify_column(event.x)
+        if not row_id or col not in ('#3', '#4'):
+            return
+        values = self.tree.item(row_id)['values']
+        if not values:
+            return
+        arquivo = values[0]
+        idx = self.tree.index(row_id)
+        if col == '#3':
+            print(f"[AÇÃO] Transcrever: {arquivo} (id: {idx})")
+        elif col == '#4':
+            print(f"[AÇÃO] Aplicar IA: {arquivo} (id: {idx})")
 
 def main():
     output_dir = "output"
