@@ -16,6 +16,8 @@ from dotenv import load_dotenv
 import json
 import re
 import tempfile
+import time
+from collections import defaultdict
 
 if sys.version_info < (3, 6):
     print("Python 3.6+ é necessário.")
@@ -193,45 +195,52 @@ class RecorderGUI:
         self.start_button.config(state=tk.DISABLED)
         self.stop_button.config(state=tk.NORMAL)
         self.status.config(text="Gravando... (clique em Encerrar para finalizar)", fg="#1976D2")
-        self.filename = self.get_output_filename()
-        mic_device = self.get_default_source()
-        monitor_device = self.get_default_sink_monitor()
-        use_mic = self.var_mic.get()
-        use_out = self.var_out.get()
-        if not use_mic and not use_out:
-            self.status.config(text="Selecione pelo menos uma fonte para gravar.", fg="#F44336")
-            self.update_start_button_state()
-            return
-            self.is_recording = False
-            self.start_button.config(state=tk.NORMAL)
-            self.stop_button.config(state=tk.DISABLED)
-            return
-        self.pipeline = self.build_gst_pipeline_mix(mic_device, monitor_device, self.filename, use_mic, use_out)
-        self.loop = GLib.MainLoop()
-        self.thread = threading.Thread(target=self._run_gst_loop, daemon=True)
+        self.filename_base = self.get_output_filename().replace('.ogg', '')
+        self.mic_device = self.get_default_source()
+        self.monitor_device = self.get_default_sink_monitor()
+        self.use_mic = self.var_mic.get()
+        self.use_out = self.var_out.get()
+        self.current_block = 1
+        self._stop_recording_flag = threading.Event()
+        self.thread = threading.Thread(target=self._record_in_blocks, daemon=True)
         self.thread.start()
 
-    def _run_gst_loop(self):
-        self.pipeline.set_state(Gst.State.PLAYING)
-        try:
-            self.loop.run()
-        except Exception as e:
-            print(f"Erro durante a gravação: {e}")
-            self.pipeline.set_state(Gst.State.NULL)
+    def _record_in_blocks(self):
+        while not self._stop_recording_flag.is_set():
+            filename = f"{self.filename_base}_{self.current_block:02d}.ogg"
+            pipeline = self.build_gst_pipeline_mix(self.mic_device, self.monitor_device, filename, self.use_mic, self.use_out)
+            loop = GLib.MainLoop()
+            pipeline.set_state(Gst.State.PLAYING)
+            print(f"[DEBUG] Iniciando bloco {self.current_block}: {filename}")
+            t = threading.Thread(target=lambda: self._wait_and_stop_block(loop, pipeline), daemon=True)
+            t.start()
+            try:
+                loop.run()
+            except Exception as e:
+                print(f"Erro durante a gravação do bloco: {e}")
+            pipeline.set_state(Gst.State.NULL)
+            self.current_block += 1
+        print("[DEBUG] Gravação encerrada.")
+
+    def _wait_and_stop_block(self, loop, pipeline):
+        # Espera RECORD_BLOCK_SECONDS ou até o flag de parada
+        for _ in range(RECORD_BLOCK_SECONDS):
+            if self._stop_recording_flag.is_set():
+                break
+            time.sleep(1)
+        loop.quit()
+        pipeline.set_state(Gst.State.NULL)
 
     def stop_recording(self):
         if not self.is_recording:
             return
         self.is_recording = False
+        self._stop_recording_flag.set()
         self.start_button.config(state=tk.NORMAL)
         self.stop_button.config(state=tk.DISABLED)
         self.status.config(text="Gravação finalizada!", fg="#388E3C")
-        if self.pipeline:
-            self.pipeline.set_state(Gst.State.NULL)
-        if self.loop:
-            self.loop.quit()
         self.refresh_files()
-        messagebox.showinfo("Gravação finalizada", f"Arquivo salvo em:\n{self.filename}")
+        messagebox.showinfo("Gravação finalizada", f"Arquivos salvos em blocos de até {RECORD_BLOCK_SECONDS} segundos.")
 
     def refresh_files(self):
         for row in self.tree.get_children():
@@ -239,12 +248,35 @@ class RecorderGUI:
         if not os.path.exists(self.output_dir):
             return
         files = [f for f in os.listdir(self.output_dir) if f.endswith('.ogg')]
-        files.sort(reverse=True)
-        for idx, f in enumerate(files):
-            path = os.path.join(self.output_dir, f)
-            dt = datetime.fromtimestamp(os.path.getmtime(path)).strftime('%d/%m/%Y %H:%M:%S')
+        files.sort()
+        # Agrupa arquivos por prefixo base
+        gravacoes = defaultdict(list)
+        for f in files:
             nome_base = os.path.splitext(f)[0]
-            caminho_db = os.path.join(self.output_dir, f"{nome_base}_ia.json")
+            m = re.match(r'(.+_\d{8}_\d{6})_\d{2}$', nome_base)
+            if m:
+                prefixo_base = m.group(1)
+            else:
+                prefixo_base = nome_base
+            gravacoes[prefixo_base].append(f)
+        # Exibe um registro por gravação
+        for prefixo_base, blocos in sorted(gravacoes.items(), reverse=True):
+            # Soma duração dos blocos
+            duracao_total = 0
+            dt = ''
+            for idx, f in enumerate(sorted(blocos)):
+                path = os.path.join(self.output_dir, f)
+                try:
+                    audio = AudioSegment.from_file(path)
+                    duracao_total += int(audio.duration_seconds)
+                    if idx == 0:
+                        dt = datetime.fromtimestamp(os.path.getmtime(path)).strftime('%d/%m/%Y %H:%M:%S')
+                except Exception:
+                    pass
+            minutos = duracao_total // 60
+            segundos = duracao_total % 60
+            duracao_str = f"{minutos:02d}:{segundos:02d}"
+            caminho_db = os.path.join(self.output_dir, f"{os.path.basename(prefixo_base)}_ia.json")
             titulo = ""
             if os.path.exists(caminho_db):
                 try:
@@ -253,28 +285,25 @@ class RecorderGUI:
                         titulo = dados_ia.get('titulo', "")
                 except Exception:
                     titulo = ""
-            # Calcula duração do áudio
-            try:
-                audio = AudioSegment.from_file(path)
-                duracao_seg = int(audio.duration_seconds)
-                minutos = duracao_seg // 60
-                segundos = duracao_seg % 60
-                duracao_str = f"{minutos:02d}:{segundos:02d}"
-            except Exception:
-                duracao_str = "--:--"
-            self.tree.insert('', 'end', values=(titulo, f, duracao_str, dt, 'detalhes'))
+            self.tree.insert('', 'end', values=(titulo, os.path.basename(prefixo_base), duracao_str, dt, 'detalhes'))
 
-    def get_selected_file(self):
+    def get_selected_prefixo_base(self):
         sel = self.tree.selection()
         if not sel:
-            messagebox.showwarning("Seleção", "Selecione um arquivo na lista.")
+            messagebox.showwarning("Seleção", "Selecione um registro na lista.")
             return None
         return self.tree.item(sel[0])['values'][1]
 
     def play_file(self):
-        f = self.get_selected_file()
-        if not f:
+        prefixo_base = self.get_selected_prefixo_base()
+        if not prefixo_base:
             return
+        # Busca um dos arquivos .ogg para passar para play_file
+        files = [f for f in os.listdir(self.output_dir) if f.startswith(prefixo_base + '_') and f.endswith('.ogg')]
+        if not files:
+            messagebox.showwarning("Reprodução", "Nenhum bloco encontrado para reproduzir.")
+            return
+        f = files[0]
         path = os.path.abspath(os.path.join(self.output_dir, f))
         if platform.system() == "Linux":
             subprocess.Popen(["xdg-open", path])
@@ -286,22 +315,37 @@ class RecorderGUI:
             webbrowser.open(path)
 
     def delete_file(self):
-        f = self.get_selected_file()
-        if not f:
+        prefixo_base = self.get_selected_prefixo_base()
+        if not prefixo_base:
             return
-        path = os.path.join(self.output_dir, f)
-        if messagebox.askyesno("Excluir", f"Deseja realmente excluir o arquivo?\n{f}"):
-            try:
-                os.remove(path)
-                self.refresh_files()
-                self.status.config(text=f"Arquivo '{f}' excluído.", fg="#F44336")
-            except Exception as e:
-                messagebox.showerror("Erro", f"Erro ao excluir: {e}")
+        # Busca todos os arquivos .ogg para excluir
+        files = [f for f in os.listdir(self.output_dir) if f.startswith(prefixo_base + '_') and f.endswith('.ogg')]
+        if not files:
+            messagebox.showinfo("Excluir Todos", "Nenhum arquivo para excluir.")
+            return
+        if messagebox.askyesno("Excluir Todos", f"Deseja realmente excluir TODOS os arquivos de áudio? ({len(files)} arquivos)"):
+            erros = 0
+            for f in files:
+                try:
+                    os.remove(os.path.join(self.output_dir, f))
+                except Exception:
+                    erros += 1
+            self.refresh_files()
+            if erros:
+                self.status.config(text=f"{len(files)-erros} arquivos excluídos, {erros} erros.", fg="#F44336")
+            else:
+                self.status.config(text=f"Todos os arquivos excluídos.", fg="#F44336")
 
     def open_file(self, event=None):
-        f = self.get_selected_file()
-        if not f:
+        prefixo_base = self.get_selected_prefixo_base()
+        if not prefixo_base:
             return
+        # Busca um dos arquivos .ogg para passar para open_file
+        files = [f for f in os.listdir(self.output_dir) if f.startswith(prefixo_base + '_') and f.endswith('.ogg')]
+        if not files:
+            messagebox.showwarning("Reprodução", "Nenhum bloco encontrado para abrir.")
+            return
+        f = files[0]
         path = os.path.abspath(os.path.join(self.output_dir, f))
         self.play_file()
 
@@ -384,62 +428,63 @@ class RecorderGUI:
 
     def transcrever_audio(self, arquivo):
         """
-        Converte o arquivo .ogg para .wav, divide em blocos de até RECORD_BLOCK_SECONDS, transcreve cada bloco usando SpeechRecognition (Google),
-        junta as transcrições, salva em .txt e remove os arquivos temporários após o processo.
+        Transcreve todos os blocos .ogg de uma mesma gravação (mesmo prefixo base), junta as transcrições e salva em um único .txt.
         Mostra feedback visual do progresso na barra de status.
         """
+        import re
         try:
-            caminho_ogg = os.path.join(self.output_dir, arquivo)
+            # Identifica o prefixo base da gravação usando regex
             nome_base = os.path.splitext(arquivo)[0]
-            caminho_wav = os.path.join(self.output_dir, f"{nome_base}.wav")
-            caminho_txt = os.path.join(self.output_dir, f"{nome_base}.txt")
-            # Converte OGG para WAV
-            audio = AudioSegment.from_file(caminho_ogg, format="ogg")
-            audio = audio.normalize()
-            audio.export(caminho_wav, format="wav")
-            # Divide em blocos de até RECORD_BLOCK_SECONDS
-            blocos = dividir_audio_em_blocos(caminho_wav, duracao_bloco_seg=RECORD_BLOCK_SECONDS)
-            total_blocos = len(blocos)
-            self.master.after(0, lambda: self.status.config(text=f"Dividido em {total_blocos} blocos de até {RECORD_BLOCK_SECONDS} segundos."))
-            recognizer = sr.Recognizer()
+            m = re.match(r'(.+_\d{8}_\d{6})_\d{2}$', nome_base)
+            if m:
+                prefixo_base = m.group(1)
+            else:
+                prefixo_base = nome_base
+            # Busca todos os blocos .ogg da mesma gravação
+            blocos_ogg = [f for f in os.listdir(self.output_dir) if f.startswith(os.path.basename(prefixo_base) + '_') and f.endswith('.ogg')]
+            # Ordena os blocos pelo sufixo numérico
+            blocos_ogg.sort(key=lambda x: int(os.path.splitext(x)[0].split('_')[-1]))
+            if not blocos_ogg:
+                self.master.after(0, lambda: messagebox.showwarning("Transcrição", "Nenhum bloco encontrado para transcrição."))
+                return
             transcricoes = []
-            for idx, bloco_path in enumerate(blocos):
+            total_blocos = len(blocos_ogg)
+            for idx, bloco_ogg in enumerate(blocos_ogg):
                 self.master.after(0, lambda idx=idx, total_blocos=total_blocos: self.status.config(text=f"Transcrevendo bloco {idx+1} de {total_blocos}..."))
+                caminho_ogg = os.path.join(self.output_dir, bloco_ogg)
+                nome_bloco = os.path.splitext(bloco_ogg)[0]
+                caminho_wav = os.path.join(self.output_dir, f"{nome_bloco}.wav")
+                # Converte OGG para WAV
+                audio = AudioSegment.from_file(caminho_ogg, format="ogg")
+                audio = audio.normalize()
+                audio.export(caminho_wav, format="wav")
+                recognizer = sr.Recognizer()
                 try:
-                    with sr.AudioFile(bloco_path) as source:
+                    with sr.AudioFile(caminho_wav) as source:
                         audio_data = recognizer.record(source)
                         texto = recognizer.recognize_google(audio_data, language='pt-BR')
                         transcricoes.append(texto)
                 except sr.UnknownValueError:
-                    transcricoes.append('[Bloco %d: não foi possível entender o áudio]' % (idx+1))
+                    transcricoes.append(f'[Bloco {idx+1}: não foi possível entender o áudio]')
                 except Exception as e:
                     transcricoes.append(f'[Bloco {idx+1}: erro ao transcrever: {e}]')
+                # Remove arquivo temporário
+                if os.path.exists(caminho_wav):
+                    try:
+                        os.remove(caminho_wav)
+                    except Exception:
+                        pass
             # Junta as transcrições
             texto_final = '\n'.join(transcricoes)
+            caminho_txt = os.path.join(self.output_dir, f"{os.path.basename(prefixo_base)}.txt")
             with open(caminho_txt, 'w', encoding='utf-8') as f:
                 f.write(texto_final)
-            # Apenas avisa que a transcrição foi finalizada
             self.master.after(0, lambda: self.status.config(text="Transcrição finalizada com sucesso!", fg="#388E3C"))
             self.master.after(0, lambda: messagebox.showinfo("Transcrição", "Transcrição finalizada com sucesso!"))
         except Exception as e:
             self.master.after(0, lambda: self.status.config(text="", fg="#555"))
             self.master.after(0, lambda: messagebox.showerror("Erro na Transcrição", f"Erro ao transcrever: {e}"))
         finally:
-            # Remove o arquivo wav temporário
-            if os.path.exists(caminho_wav):
-                try:
-                    os.remove(caminho_wav)
-                except Exception:
-                    pass
-            # Remove blocos temporários
-            if 'blocos' in locals():
-                for bloco_path in blocos:
-                    try:
-                        if os.path.exists(bloco_path):
-                            os.remove(bloco_path)
-                    except Exception:
-                        pass
-            # Reabilita botões e limpa status
             self.master.after(0, self.finalizar_transcricao_feedback)
 
     def finalizar_transcricao_feedback(self):
@@ -456,13 +501,18 @@ class RecorderGUI:
         self.refresh_files()
 
     def abrir_detalhes_gravacao(self, arquivo):
-        """
-        Abre uma janela com detalhes da gravação: data, título (IA), transcrição, resumo e principais pontos (IA).
-        """
-        nome_base = os.path.splitext(arquivo)[0]
-        caminho_ogg = os.path.join(self.output_dir, arquivo)
-        caminho_txt = os.path.join(self.output_dir, f"{nome_base}.txt")
-        caminho_db = os.path.join(self.output_dir, f"{nome_base}_ia.json")
+        # arquivo agora é o prefixo base
+        prefixo_base = arquivo
+        # Busca o primeiro bloco para pegar data e transcrição
+        files = [f for f in os.listdir(self.output_dir) if f.startswith(prefixo_base + '_') and f.endswith('.ogg')]
+        files.sort()
+        if not files:
+            messagebox.showwarning("Detalhes", "Nenhum bloco encontrado para exibir detalhes.")
+            return
+        nome_base = prefixo_base
+        caminho_ogg = os.path.join(self.output_dir, files[0])
+        caminho_txt = os.path.join(self.output_dir, f"{os.path.basename(prefixo_base)}.txt")
+        caminho_db = os.path.join(self.output_dir, f"{os.path.basename(prefixo_base)}_ia.json")
         data = datetime.fromtimestamp(os.path.getmtime(caminho_ogg)).strftime('%d/%m/%Y %H:%M:%S')
         # Lê a transcrição se existir
         if os.path.exists(caminho_txt):
@@ -492,7 +542,7 @@ class RecorderGUI:
             pontos_ia_lista = [str(pontos_ia)]
         # Cria a janela de detalhes
         detalhes = tk.Toplevel(self.master)
-        detalhes.title(f"Detalhes da Gravação: {arquivo}")
+        detalhes.title(f"Detalhes da Gravação: {prefixo_base}")
         detalhes.geometry("780x650")  # 30% maior que 600x500
         detalhes.configure(bg="#f7f7f7")
         # Data
@@ -521,27 +571,40 @@ class RecorderGUI:
         txt_pontos.config(state='disabled')
 
     def transcrever_selecionado(self):
-        arquivo = self.get_selected_file()
-        if not arquivo:
-            messagebox.showwarning("Seleção", "Selecione um arquivo na lista para transcrever.")
+        prefixo_base = self.get_selected_prefixo_base()
+        if not prefixo_base:
             return
-        self.iniciar_transcricao_thread(arquivo)
+        # Busca um dos arquivos .ogg para passar para transcrever_audio
+        files = [f for f in os.listdir(self.output_dir) if f.startswith(prefixo_base + '_') and f.endswith('.ogg')]
+        if not files:
+            messagebox.showwarning("Transcrição", "Nenhum bloco encontrado para transcrição.")
+            return
+        self.iniciar_transcricao_thread(files[0])
 
     def aplicar_ia_selecionado(self):
-        arquivo = self.get_selected_file()
-        if not arquivo:
-            messagebox.showwarning("Seleção", "Selecione um arquivo na lista para aplicar IA.")
+        prefixo_base = self.get_selected_prefixo_base()
+        if not prefixo_base:
+            return
+        files = [f for f in os.listdir(self.output_dir) if f.startswith(prefixo_base + '_') and f.endswith('.ogg')]
+        if not files:
+            messagebox.showwarning("IA", "Nenhum bloco encontrado para aplicar IA.")
             return
         self.status.config(text="Processando IA...", fg="#1976D2")
         self.ia_button.config(state=tk.DISABLED)
-        t = threading.Thread(target=self.processar_ia_gemini, args=(arquivo,), daemon=True)
+        t = threading.Thread(target=self.processar_ia_gemini, args=(files[0],), daemon=True)
         t.start()
 
     def processar_ia_gemini(self, arquivo):
+        import re
         try:
             nome_base = os.path.splitext(arquivo)[0]
-            caminho_txt = os.path.join(self.output_dir, f"{nome_base}.txt")
-            caminho_db = os.path.join(self.output_dir, f"{nome_base}_ia.json")
+            m = re.match(r'(.+_\d{8}_\d{6})_\d{2}$', nome_base)
+            if m:
+                prefixo_base = m.group(1)
+            else:
+                prefixo_base = nome_base
+            caminho_txt = os.path.join(self.output_dir, f"{os.path.basename(prefixo_base)}.txt")
+            caminho_db = os.path.join(self.output_dir, f"{os.path.basename(prefixo_base)}_ia.json")
             # Lê a transcrição
             if not os.path.exists(caminho_txt):
                 self.master.after(0, lambda: messagebox.showwarning("IA", "Transcrição não encontrada para esta gravação."))
@@ -578,7 +641,7 @@ class RecorderGUI:
             with open(caminho_db, 'w', encoding='utf-8') as f:
                 json.dump({"titulo": titulo, "resumo": resumo, "pontos": pontos}, f, ensure_ascii=False, indent=2)
             # Atualiza a grid e modal
-            self.master.after(0, lambda: self.atualizar_titulo_grid(arquivo, titulo))
+            self.master.after(0, lambda: self.atualizar_titulo_grid(os.path.basename(prefixo_base), titulo))
             self.master.after(0, lambda: messagebox.showinfo("IA", "Resumo, título e pontos principais gerados com sucesso!"))
         except Exception as e:
             self.master.after(0, lambda: messagebox.showerror("Erro IA", f"Erro ao processar IA: {e}"))
