@@ -9,12 +9,13 @@ from tkinter import messagebox, ttk
 import sys
 import platform
 import webbrowser
-from pydub import AudioSegment
+from pydub import AudioSegment, silence
 import speech_recognition as sr
 import google.generativeai as genai
 from dotenv import load_dotenv
 import json
 import re
+import tempfile
 
 if sys.version_info < (3, 6):
     print("Python 3.6+ é necessário.")
@@ -29,6 +30,7 @@ Gst.init(None)
 load_dotenv()
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 GEMINI_MODEL = os.getenv('GEMINI_MODEL')
+RECORD_BLOCK_SECONDS = int(os.getenv('RECORD_BLOCK_SECONDS', '240'))
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
@@ -72,14 +74,16 @@ class RecorderGUI:
         self.refresh_button.grid(row=0, column=2, padx=8, pady=2, ipady=2)
 
         # --- Tabela de arquivos ---
-        self.tree = ttk.Treeview(master, columns=("titulo", "arquivo", "datahora", "detalhes"), show="headings", height=12)
+        self.tree = ttk.Treeview(master, columns=("titulo", "arquivo", "duracao", "datahora", "detalhes"), show="headings", height=12)
         self.tree.heading("titulo", text="Título")
         self.tree.heading("arquivo", text="Arquivo")
+        self.tree.heading("duracao", text="Duração")
         self.tree.heading("datahora", text="Data/Hora")
         self.tree.heading("detalhes", text="Detalhes")
-        self.tree.column("titulo", width=320)
-        self.tree.column("arquivo", width=500)
-        self.tree.column("datahora", width=200)
+        self.tree.column("titulo", width=260)
+        self.tree.column("arquivo", width=320)
+        self.tree.column("duracao", width=80, anchor="center")
+        self.tree.column("datahora", width=160)
         self.tree.column("detalhes", width=100, anchor="center")
         self.tree.pack(pady=10, fill='x', expand=True)
         self.tree.bind('<Double-1>', self.open_file)
@@ -249,7 +253,16 @@ class RecorderGUI:
                         titulo = dados_ia.get('titulo', "")
                 except Exception:
                     titulo = ""
-            self.tree.insert('', 'end', values=(titulo, f, dt, 'detalhes'))
+            # Calcula duração do áudio
+            try:
+                audio = AudioSegment.from_file(path)
+                duracao_seg = int(audio.duration_seconds)
+                minutos = duracao_seg // 60
+                segundos = duracao_seg % 60
+                duracao_str = f"{minutos:02d}:{segundos:02d}"
+            except Exception:
+                duracao_str = "--:--"
+            self.tree.insert('', 'end', values=(titulo, f, duracao_str, dt, 'detalhes'))
 
     def get_selected_file(self):
         sel = self.tree.selection()
@@ -324,25 +337,27 @@ class RecorderGUI:
             else:
                 self.status.config(text=f"Todos os arquivos excluídos.", fg="#F44336")
 
-    def on_tree_click(self, event):
+    def on_tree_click_detalhes(self, event):
         region = self.tree.identify('region', event.x, event.y)
         if region != 'cell':
             return
         row_id = self.tree.identify_row(event.y)
         col = self.tree.identify_column(event.x)
-        if not row_id or col not in ('#3', '#4'):
+        if not row_id:
+            return
+        # Descobre dinamicamente o índice da coluna 'detalhes'
+        colunas = self.tree['columns']
+        try:
+            idx_detalhes = list(colunas).index('detalhes') + 1  # +1 porque Treeview começa em 1
+        except ValueError:
+            return
+        if col != f'#{idx_detalhes}':
             return
         values = self.tree.item(row_id)['values']
         if not values:
             return
         arquivo = values[1]
-        idx = self.tree.index(row_id)
-        if col == '#3':
-            # Chama a transcrição ao clicar em '[Transcrever]'
-            self.iniciar_transcricao_thread(arquivo)
-        elif col == '#4':
-            # Abre a tela de detalhes
-            self.abrir_detalhes_gravacao(arquivo)
+        self.abrir_detalhes_gravacao(arquivo)
 
     def on_tree_motion(self, event):
         row_id = self.tree.identify_row(event.y)
@@ -369,8 +384,9 @@ class RecorderGUI:
 
     def transcrever_audio(self, arquivo):
         """
-        Converte o arquivo .ogg para .wav, transcreve o áudio usando SpeechRecognition (Google),
-        salva a transcrição em .txt e remove o .wav após o processo.
+        Converte o arquivo .ogg para .wav, divide em blocos de até RECORD_BLOCK_SECONDS, transcreve cada bloco usando SpeechRecognition (Google),
+        junta as transcrições, salva em .txt e remove os arquivos temporários após o processo.
+        Mostra feedback visual do progresso na barra de status.
         """
         try:
             caminho_ogg = os.path.join(self.output_dir, arquivo)
@@ -381,19 +397,32 @@ class RecorderGUI:
             audio = AudioSegment.from_file(caminho_ogg, format="ogg")
             audio = audio.normalize()
             audio.export(caminho_wav, format="wav")
-            # Transcreve o áudio
+            # Divide em blocos de até RECORD_BLOCK_SECONDS
+            blocos = dividir_audio_em_blocos(caminho_wav, duracao_bloco_seg=RECORD_BLOCK_SECONDS)
+            total_blocos = len(blocos)
+            self.master.after(0, lambda: self.status.config(text=f"Dividido em {total_blocos} blocos de até {RECORD_BLOCK_SECONDS} segundos."))
             recognizer = sr.Recognizer()
-            with sr.AudioFile(caminho_wav) as source:
-                audio_data = recognizer.record(source)
-                texto = recognizer.recognize_google(audio_data, language='pt-BR')
-            # Salva a transcrição em arquivo txt
+            transcricoes = []
+            for idx, bloco_path in enumerate(blocos):
+                self.master.after(0, lambda idx=idx, total_blocos=total_blocos: self.status.config(text=f"Transcrevendo bloco {idx+1} de {total_blocos}..."))
+                try:
+                    with sr.AudioFile(bloco_path) as source:
+                        audio_data = recognizer.record(source)
+                        texto = recognizer.recognize_google(audio_data, language='pt-BR')
+                        transcricoes.append(texto)
+                except sr.UnknownValueError:
+                    transcricoes.append('[Bloco %d: não foi possível entender o áudio]' % (idx+1))
+                except Exception as e:
+                    transcricoes.append(f'[Bloco {idx+1}: erro ao transcrever: {e}]')
+            # Junta as transcrições
+            texto_final = '\n'.join(transcricoes)
             with open(caminho_txt, 'w', encoding='utf-8') as f:
-                f.write(texto)
+                f.write(texto_final)
             # Apenas avisa que a transcrição foi finalizada
+            self.master.after(0, lambda: self.status.config(text="Transcrição finalizada com sucesso!", fg="#388E3C"))
             self.master.after(0, lambda: messagebox.showinfo("Transcrição", "Transcrição finalizada com sucesso!"))
-        except sr.UnknownValueError:
-            self.master.after(0, lambda: messagebox.showwarning("Transcrição", "Não foi possível entender o áudio."))
         except Exception as e:
+            self.master.after(0, lambda: self.status.config(text="", fg="#555"))
             self.master.after(0, lambda: messagebox.showerror("Erro na Transcrição", f"Erro ao transcrever: {e}"))
         finally:
             # Remove o arquivo wav temporário
@@ -402,6 +431,14 @@ class RecorderGUI:
                     os.remove(caminho_wav)
                 except Exception:
                     pass
+            # Remove blocos temporários
+            if 'blocos' in locals():
+                for bloco_path in blocos:
+                    try:
+                        if os.path.exists(bloco_path):
+                            os.remove(bloco_path)
+                    except Exception:
+                        pass
             # Reabilita botões e limpa status
             self.master.after(0, self.finalizar_transcricao_feedback)
 
@@ -415,7 +452,7 @@ class RecorderGUI:
         self.delete_all_button.config(state=tk.NORMAL)
         self.refresh_button.config(state=tk.NORMAL)
         # Reabilita o clique na treeview
-        self.tree.bind('<Button-1>', self.on_tree_click)
+        self.tree.bind('<Button-1>', self.on_tree_click_detalhes)
         self.refresh_files()
 
     def abrir_detalhes_gravacao(self, arquivo):
@@ -557,19 +594,52 @@ class RecorderGUI:
                 self.tree.set(row, 'titulo', titulo)
                 break
 
-    def on_tree_click_detalhes(self, event):
-        region = self.tree.identify('region', event.x, event.y)
-        if region != 'cell':
-            return
-        row_id = self.tree.identify_row(event.y)
-        col = self.tree.identify_column(event.x)
-        if not row_id or col != '#4':
-            return
-        values = self.tree.item(row_id)['values']
-        if not values:
-            return
-        arquivo = values[1]
-        self.abrir_detalhes_gravacao(arquivo)
+def dividir_audio_em_blocos(caminho_wav, duracao_bloco_seg=240, min_silencio_ms=700, silencio_thresh_db=-40):
+    """
+    Divide um arquivo .wav em blocos de até 'duracao_bloco_seg' segundos, cortando preferencialmente nos silêncios.
+    Se o áudio for menor ou igual ao limite, retorna um único bloco.
+    Adiciona logs para depuração.
+    """
+    audio = AudioSegment.from_wav(caminho_wav)
+    duracao_total = len(audio) / 1000  # em segundos
+    blocos = []
+    print(f"[DEBUG] Duração total do áudio: {duracao_total:.2f} segundos")
+    if duracao_total <= duracao_bloco_seg:
+        bloco_path = os.path.join(tempfile.gettempdir(), f"bloco_{os.path.basename(caminho_wav)}_0.wav")
+        audio.export(bloco_path, format="wav")
+        print(f"[DEBUG] Bloco único: início=0.00s, fim={duracao_total:.2f}s, duração={duracao_total:.2f}s, sem cortes")
+        blocos.append(bloco_path)
+        print(f"[DEBUG] Total de blocos gerados: 1")
+        return blocos
+    inicio = 0
+    bloco_idx = 0
+    while inicio < len(audio):
+        fim = min(inicio + duracao_bloco_seg * 1000, len(audio))
+        segmento = audio[inicio:fim]
+        # Tenta encontrar silêncio próximo ao final do bloco
+        sil = silence.detect_silence(segmento, min_silence_len=min_silencio_ms, silence_thresh=silencio_thresh_db)
+        corte = None
+        for s in reversed(sil):
+            # Procura silêncio nos últimos 30 segundos do bloco
+            if s[1] > len(segmento) - 30000:
+                corte = s[1]
+                break
+        if corte:
+            bloco = segmento[:corte]
+            proximo_inicio = inicio + corte
+            motivo = f"corte por silêncio em {corte/1000:.2f}s do bloco"
+        else:
+            bloco = segmento
+            proximo_inicio = fim
+            motivo = "corte por tempo máximo"
+        bloco_path = os.path.join(tempfile.gettempdir(), f"bloco_{os.path.basename(caminho_wav)}_{bloco_idx}.wav")
+        bloco.export(bloco_path, format="wav")
+        print(f"[DEBUG] Bloco {bloco_idx+1}: início={inicio/1000:.2f}s, fim={proximo_inicio/1000:.2f}s, duração={(proximo_inicio-inicio)/1000:.2f}s, {motivo}")
+        blocos.append(bloco_path)
+        inicio = proximo_inicio
+        bloco_idx += 1
+    print(f"[DEBUG] Total de blocos gerados: {len(blocos)}")
+    return blocos
 
 def main():
     output_dir = "output"
