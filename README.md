@@ -128,6 +128,34 @@ recordai/
 
 ---
 
+## Observação sobre Atalhos Globais no Linux
+
+Para que o recurso de atalho global (ex: Ctrl+Alt+S) funcione no Linux, é necessário rodar a aplicação como root, pois a biblioteca `keyboard` exige permissões elevadas para capturar teclas globalmente.
+
+**Como rodar:**
+
+Se estiver usando ambiente virtual (venv):
+
+```bash
+sudo -E venv/bin/python recordai.py
+```
+
+Se não estiver usando venv:
+
+```bash
+sudo python3 recordai.py
+```
+
+> **Atenção:**
+> - O uso de sudo é necessário apenas para o atalho global. As demais funções da aplicação funcionam normalmente sem sudo.
+> - Se faltar algum pacote ao rodar como root, instale com:
+>   ```bash
+>   sudo pip install -r requirements.txt
+>   ```
+> - Em ambientes Wayland (Ubuntu 22+ padrão), atalhos globais podem não funcionar. Prefira X11 para esse recurso.
+
+---
+
 ## Licença
 
-Projeto livre para uso e modificação. 
+Projeto livre para uso e modificação.

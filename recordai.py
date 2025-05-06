@@ -18,6 +18,7 @@ import re
 import tempfile
 import time
 from collections import defaultdict
+import getpass
 
 if sys.version_info < (3, 6):
     print("Python 3.6+ é necessário.")
@@ -126,12 +127,20 @@ class RecorderGUI:
         # Não faz pack aqui, só quando iniciar gravação
 
         self.refresh_files()
+        # Atalho local para print: Ctrl+Alt+M
+        self.master.bind('<Control-Alt-m>', lambda event: self.capturar_print_monitor_mouse())
+        # Listener global (pynput)
+        self._start_pynput_hotkey_listener()
 
     def get_output_dir_and_prefix(self):
         # Gera o timestamp no padrão AAAAMMDDHHMMSS
         timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
         output_dir = os.path.join(self.output_dir, timestamp)
         os.makedirs(output_dir, exist_ok=True)
+        try:
+            ajustar_permissao_usuario(output_dir)
+        except Exception as e:
+            print(f"[PERMISSAO] Falha ao ajustar permissão do diretório: {e}")
         prefix = f'gravacao'
         return output_dir, prefix, timestamp
 
@@ -253,6 +262,10 @@ class RecorderGUI:
             except Exception as e:
                 print(f"Erro durante a gravação do bloco: {e}")
             pipeline.set_state(Gst.State.NULL)
+            try:
+                ajustar_permissao_usuario(filename)
+            except Exception as e:
+                print(f"[PERMISSAO] Falha ao ajustar permissão do bloco: {e}")
             self.current_block += 1
         print("[DEBUG] Gravação encerrada.")
 
@@ -299,6 +312,10 @@ class RecorderGUI:
                 m3u.write('#EXTM3U\n')
                 for bloco in blocos:
                     m3u.write(f'{os.path.abspath(os.path.join(full_dir, bloco))}\n')
+            try:
+                ajustar_permissao_usuario(playlist_path)
+            except Exception as e:
+                print(f"[PERMISSAO] Falha ao ajustar permissão do playlist: {e}")
             duracao_total = 0
             try:
                 path_primeiro_bloco = os.path.join(full_dir, blocos[0])
@@ -521,6 +538,10 @@ class RecorderGUI:
                 audio = AudioSegment.from_file(caminho_ogg, format="ogg")
                 audio = audio.normalize()
                 audio.export(caminho_wav, format="wav")
+                try:
+                    ajustar_permissao_usuario(caminho_wav)
+                except Exception as e:
+                    print(f"[PERMISSAO] Falha ao ajustar permissão do wav: {e}")
                 recognizer = sr.Recognizer()
                 try:
                     with sr.AudioFile(caminho_wav) as source:
@@ -542,11 +563,16 @@ class RecorderGUI:
             caminho_txt = os.path.join(gravacao_dir, 'gravacao.txt')
             with open(caminho_txt, 'w', encoding='utf-8') as f:
                 f.write(texto_final)
+            try:
+                ajustar_permissao_usuario(caminho_txt)
+            except Exception as e:
+                print(f"[PERMISSAO] Falha ao ajustar permissão do txt: {e}")
             self.master.after(0, lambda: self.status.config(text="Transcrição finalizada com sucesso!", fg="#388E3C"))
             self.master.after(0, lambda: messagebox.showinfo("Transcrição", "Transcrição finalizada com sucesso!"))
         except Exception as e:
+            print(f"[TRANSCRIÇÃO] Erro ao transcrever: {e}")
+            self.master.after(0, lambda err=e: messagebox.showerror("Erro na Transcrição", f"Erro ao transcrever: {err}"))
             self.master.after(0, lambda: self.status.config(text="", fg="#555"))
-            self.master.after(0, lambda: messagebox.showerror("Erro na Transcrição", f"Erro ao transcrever: {e}"))
         finally:
             self.master.after(0, self.finalizar_transcricao_feedback)
             self.master.after(0, lambda: self.tree.bind('<Button-1>', self.on_tree_click_detalhes))
@@ -565,20 +591,18 @@ class RecorderGUI:
         self.refresh_files()
 
     def abrir_detalhes_gravacao(self, gravacao_dir):
-        print('[DEBUG] abrir_detalhes_gravacao chamado')
-        print(f'[DEBUG] abrir_detalhes_gravacao - gravacao_dir: {gravacao_dir}')
+        import tkinter as tk
+        from tkinter import ttk
+        import os, json
+        from datetime import datetime
         files = [f for f in os.listdir(gravacao_dir) if f.endswith('.ogg')]
         files.sort()
-        print(f'[DEBUG] abrir_detalhes_gravacao - arquivos .ogg: {files}')
         if not files:
             messagebox.showwarning("Detalhes", "Nenhum bloco encontrado para exibir detalhes.")
             return
         caminho_ogg = os.path.join(gravacao_dir, files[0])
         caminho_txt = os.path.join(gravacao_dir, 'gravacao.txt')
         caminho_db = os.path.join(gravacao_dir, 'gravacao_ia.json')
-        print(f'[DEBUG] abrir_detalhes_gravacao - caminho_ogg: {caminho_ogg}')
-        print(f'[DEBUG] abrir_detalhes_gravacao - caminho_txt: {caminho_txt}')
-        print(f'[DEBUG] abrir_detalhes_gravacao - caminho_db: {caminho_db}')
         data = datetime.fromtimestamp(os.path.getmtime(caminho_ogg)).strftime('%d/%m/%Y %H:%M:%S')
         if os.path.exists(caminho_txt):
             with open(caminho_txt, 'r', encoding='utf-8') as f:
@@ -605,27 +629,97 @@ class RecorderGUI:
             pontos_ia_lista = [str(pontos_ia)]
         detalhes = tk.Toplevel(self.master)
         detalhes.title(f"Detalhes da Gravação: {os.path.basename(gravacao_dir)}")
-        detalhes.geometry("780x650")
+        detalhes.geometry("800x700")
         detalhes.configure(bg="#f7f7f7")
-        tk.Label(detalhes, text=f"Data/Hora: {data}", font=("Arial", 11, "bold"), bg="#f7f7f7").pack(anchor='w', padx=16, pady=(16, 4))
-        tk.Label(detalhes, text="Título:", font=("Arial", 11, "bold"), bg="#f7f7f7").pack(anchor='w', padx=16, pady=(8, 0))
+        # Notebook (abas)
+        notebook = ttk.Notebook(detalhes)
+        notebook.pack(fill='both', expand=True, padx=10, pady=10)
+        # Aba Texto
+        frame_texto = tk.Frame(notebook, bg="#f7f7f7")
+        notebook.add(frame_texto, text="Texto")
+        tk.Label(frame_texto, text=f"Data/Hora: {data}", font=("Arial", 11, "bold"), bg="#f7f7f7").pack(anchor='w', padx=16, pady=(16, 4))
+        tk.Label(frame_texto, text="Título:", font=("Arial", 11, "bold"), bg="#f7f7f7").pack(anchor='w', padx=16, pady=(8, 0))
         self.titulo_var = tk.StringVar(value=titulo_ia)
-        tk.Entry(detalhes, textvariable=self.titulo_var, font=("Arial", 12), width=60, state='readonly').pack(anchor='w', padx=16, pady=(0, 8))
-        tk.Label(detalhes, text="Transcrição:", font=("Arial", 11, "bold"), bg="#f7f7f7").pack(anchor='w', padx=16, pady=(8, 0))
-        txt_transc = tk.Text(detalhes, font=("Arial", 12), height=10, wrap='word')
+        tk.Entry(frame_texto, textvariable=self.titulo_var, font=("Arial", 12), width=60, state='readonly').pack(anchor='w', padx=16, pady=(0, 8))
+        tk.Label(frame_texto, text="Transcrição:", font=("Arial", 11, "bold"), bg="#f7f7f7").pack(anchor='w', padx=16, pady=(8, 0))
+        txt_transc = tk.Text(frame_texto, font=("Arial", 12), height=10, wrap='word')
         txt_transc.pack(fill='both', expand=False, padx=16, pady=(0, 8))
         txt_transc.insert('1.0', transcricao)
         txt_transc.config(state='disabled')
-        tk.Label(detalhes, text="Resumo:", font=("Arial", 11, "bold"), bg="#f7f7f7").pack(anchor='w', padx=16, pady=(8, 0))
-        txt_resumo = tk.Text(detalhes, font=("Arial", 12), height=6, wrap='word')
+        tk.Label(frame_texto, text="Resumo:", font=("Arial", 11, "bold"), bg="#f7f7f7").pack(anchor='w', padx=16, pady=(8, 0))
+        txt_resumo = tk.Text(frame_texto, font=("Arial", 12), height=6, wrap='word')
         txt_resumo.pack(fill='both', expand=False, padx=16, pady=(0, 8))
         txt_resumo.insert('1.0', resumo_ia)
         txt_resumo.config(state='disabled')
-        tk.Label(detalhes, text="Principais Pontos:", font=("Arial", 11, "bold"), bg="#f7f7f7").pack(anchor='w', padx=16, pady=(8, 0))
-        txt_pontos = tk.Text(detalhes, font=("Arial", 12), height=8, wrap='word')
+        tk.Label(frame_texto, text="Principais Pontos:", font=("Arial", 11, "bold"), bg="#f7f7f7").pack(anchor='w', padx=16, pady=(8, 0))
+        txt_pontos = tk.Text(frame_texto, font=("Arial", 12), height=8, wrap='word')
         txt_pontos.pack(fill='both', expand=False, padx=16, pady=(0, 16))
         txt_pontos.insert('1.0', '\n'.join(f'- {item}' for item in pontos_ia_lista))
         txt_pontos.config(state='disabled')
+        # Aba Prints - miniaturas em grade rolável
+        frame_imgs = tk.Frame(notebook, bg="#f7f7f7")
+        notebook.add(frame_imgs, text="Prints")
+        self._detalhes_frame_imgs = frame_imgs
+        self._detalhes_gravacao_dir = gravacao_dir
+        self._detalhes_imgs_refs = []  # manter referências
+        btn_atualizar = tk.Button(frame_imgs, text="Atualizar Prints", command=self._atualizar_aba_prints_grade, font=("Arial", 10))
+        btn_atualizar.pack(anchor='ne', padx=10, pady=5)
+        self._frame_prints_canvas = tk.Frame(frame_imgs, bg="#f7f7f7")
+        self._frame_prints_canvas.pack(fill='both', expand=True)
+        self._atualizar_aba_prints_grade()
+
+    def _atualizar_aba_prints_grade(self):
+        import tkinter as tk
+        import os
+        from glob import glob
+        from PIL import Image, ImageTk
+        # Limpa frame
+        for widget in self._frame_prints_canvas.winfo_children():
+            widget.destroy()
+        gravacao_dir = getattr(self, '_detalhes_gravacao_dir', None)
+        if not gravacao_dir:
+            return
+        prints = sorted(glob(os.path.join(gravacao_dir, 'print_*.png')))
+        if prints:
+            canvas = tk.Canvas(self._frame_prints_canvas, bg="#f7f7f7", highlightthickness=0)
+            scrollbar = tk.Scrollbar(self._frame_prints_canvas, orient="vertical", command=canvas.yview)
+            scroll_frame = tk.Frame(canvas, bg="#f7f7f7")
+            scroll_frame.bind(
+                "<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+            )
+            canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
+            canvas.configure(yscrollcommand=scrollbar.set)
+            canvas.pack(side="left", fill="both", expand=True)
+            scrollbar.pack(side="right", fill="y")
+            self._detalhes_imgs_refs = []
+            max_per_row = 3
+            for idx, img_path in enumerate(prints):
+                img = Image.open(img_path)
+                img.thumbnail((180, 120))
+                tk_img = ImageTk.PhotoImage(img)
+                self._detalhes_imgs_refs.append(tk_img)
+                def abrir_full(img_path=img_path):
+                    top = tk.Toplevel(self._frame_prints_canvas)
+                    top.title(os.path.basename(img_path))
+                    img_full = Image.open(img_path)
+                    tk_img_full = ImageTk.PhotoImage(img_full)
+                    lbl = tk.Label(top, image=tk_img_full)
+                    lbl.image = tk_img_full
+                    lbl.pack()
+                frame_thumb = tk.Frame(scroll_frame, bg="#f7f7f7", bd=1, relief="solid")
+                btn = tk.Button(frame_thumb, image=tk_img, command=abrir_full, bg="#f7f7f7", relief="flat")
+                btn.pack()
+                tk.Label(frame_thumb, text=os.path.basename(img_path), font=("Arial", 9), bg="#f7f7f7").pack()
+                row = idx // max_per_row
+                col = idx % max_per_row
+                frame_thumb.grid(row=row, column=col, padx=10, pady=10)
+        else:
+            tk.Label(self._frame_prints_canvas, text="Nenhum print capturado ainda.", font=("Arial", 12, "italic"), bg="#f7f7f7", fg="#888").pack(pady=30)
+
+    def _atualizar_aba_prints(self, img_path):
+        # Atualiza a grade de prints ao capturar novo print, se a janela de detalhes estiver aberta
+        if hasattr(self, '_frame_prints_canvas') and hasattr(self, '_atualizar_aba_prints_grade'):
+            self._atualizar_aba_prints_grade()
 
     def transcrever_selecionado(self):
         print('[DEBUG] transcrever_selecionado chamado')
@@ -696,6 +790,10 @@ class RecorderGUI:
             # Salva no banco de dados json
             with open(caminho_db, 'w', encoding='utf-8') as f:
                 json.dump({"titulo": titulo, "resumo": resumo, "pontos": pontos}, f, ensure_ascii=False, indent=2)
+            try:
+                ajustar_permissao_usuario(caminho_db)
+            except Exception as e:
+                print(f"[PERMISSAO] Falha ao ajustar permissão do json: {e}")
             # Atualiza a grid e modal
             self.atualizar_titulo_grid(gravacao_dir, titulo)
             self.master.after(0, lambda: messagebox.showinfo("IA", "Resumo, título e pontos principais gerados com sucesso!"))
@@ -726,6 +824,82 @@ class RecorderGUI:
         row_id = self.tree.identify_row(event.y)
         if row_id:
             self.tree.selection_set(row_id)
+
+    def capturar_print_monitor_mouse(self):
+        import pyautogui
+        from screeninfo import get_monitors
+        from datetime import datetime
+        import os
+        try:
+            x, y = pyautogui.position()
+            for m in get_monitors():
+                if m.x <= x < m.x + m.width and m.y <= y < m.y + m.height:
+                    region = (m.x, m.y, m.width, m.height)
+                    break
+            else:
+                print('[PRINT] Não foi possível identificar o monitor do mouse.')
+                self.status.config(text="Não foi possível identificar o monitor do mouse.", fg="#F44336")
+                return
+            img = pyautogui.screenshot(region=region)
+            grav_dir = self.get_selected_gravacao_dir()
+            if grav_dir and os.path.isdir(grav_dir):
+                ts = datetime.now().strftime('%H-%M-%S')
+                path = os.path.join(grav_dir, f'print_{ts}.png')
+                img.save(path)
+                print(f'[PRINT] Print salvo: {path}')
+                self._ultimo_print_path = path
+                self._atualizar_aba_prints(path)
+                try:
+                    ajustar_permissao_usuario(path)
+                except Exception as e:
+                    print(f"[PERMISSAO] Não foi possível ajustar permissões do arquivo: {e}")
+                self.status.config(text="Print de tela capturado com sucesso!", fg="#388E3C")
+            else:
+                print('[PRINT] Nenhuma gravação selecionada na grid para salvar o print.')
+                self.status.config(text="Nenhuma gravação selecionada para salvar o print.", fg="#F44336")
+        except Exception as e:
+            print(f'[PRINT] Erro ao capturar print: {e}')
+            self.status.config(text=f"Erro ao capturar print: {e}", fg="#F44336")
+
+    def _start_pynput_hotkey_listener(self):
+        try:
+            from pynput import keyboard
+        except ImportError:
+            print('[HOTKEY] pynput não instalado. Atalho global não funcionará.')
+            return
+        def on_activate():
+            print('[HOTKEY] Ctrl+Alt+M pressionado (global)!')
+            self.master.after(0, self.capturar_print_monitor_mouse)
+        hotkey = keyboard.HotKey(
+            keyboard.HotKey.parse('<ctrl>+<alt>+m'),
+            on_activate
+        )
+        def for_canonical(f):
+            return lambda k: f(self._listener.canonical(k))
+        def listen():
+            with keyboard.Listener(
+                on_press=for_canonical(hotkey.press),
+                on_release=for_canonical(hotkey.release)
+            ) as listener:
+                self._listener = listener
+                try:
+                    listener.join()
+                except Exception as e:
+                    print(f'[HOTKEY] Erro no listener global: {e}')
+                    self.master.after(0, lambda: self.status.config(text="Atalho global não suportado neste ambiente.", fg="#F44336"))
+        t = threading.Thread(target=listen, daemon=True)
+        t.start()
+
+def ajustar_permissao_usuario(path):
+    try:
+        user = os.getenv("SUDO_USER") or getpass.getuser()
+        if user and user != "root":
+            import pwd
+            uid = pwd.getpwnam(user).pw_uid
+            gid = pwd.getpwnam(user).pw_gid
+            os.chown(path, uid, gid)
+    except Exception as e:
+        print(f"[PERMISSAO] Não foi possível ajustar permissões do arquivo: {e}")
 
 def dividir_audio_em_blocos(caminho_wav, duracao_bloco_seg=240, min_silencio_ms=700, silencio_thresh_db=-40):
     """
