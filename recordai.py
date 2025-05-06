@@ -699,13 +699,7 @@ class RecorderGUI:
                 tk_img = ImageTk.PhotoImage(img)
                 self._detalhes_imgs_refs.append(tk_img)
                 def abrir_full(img_path=img_path):
-                    top = tk.Toplevel(self._frame_prints_canvas)
-                    top.title(os.path.basename(img_path))
-                    img_full = Image.open(img_path)
-                    tk_img_full = ImageTk.PhotoImage(img_full)
-                    lbl = tk.Label(top, image=tk_img_full)
-                    lbl.image = tk_img_full
-                    lbl.pack()
+                    self._abrir_modal_print(img_path)
                 frame_thumb = tk.Frame(scroll_frame, bg="#f7f7f7", bd=1, relief="solid")
                 btn = tk.Button(frame_thumb, image=tk_img, command=abrir_full, bg="#f7f7f7", relief="flat")
                 btn.pack()
@@ -716,10 +710,119 @@ class RecorderGUI:
         else:
             tk.Label(self._frame_prints_canvas, text="Nenhum print capturado ainda.", font=("Arial", 12, "italic"), bg="#f7f7f7", fg="#888").pack(pady=30)
 
-    def _atualizar_aba_prints(self, img_path):
-        # Atualiza a grade de prints ao capturar novo print, se a janela de detalhes estiver aberta
-        if hasattr(self, '_frame_prints_canvas') and hasattr(self, '_atualizar_aba_prints_grade'):
-            self._atualizar_aba_prints_grade()
+    def _abrir_modal_print(self, img_path):
+        import tkinter as tk
+        from PIL import Image, ImageTk
+        import os, json
+        modal = tk.Toplevel(self.master)
+        modal.title(f"Print: {os.path.basename(img_path)}")
+        modal.geometry("700x700")
+        modal.configure(bg="#f7f7f7")
+        # Imagem grande
+        img = Image.open(img_path)
+        img.thumbnail((650, 400))
+        tk_img = ImageTk.PhotoImage(img)
+        lbl_img = tk.Label(modal, image=tk_img, bg="#f7f7f7")
+        lbl_img.image = tk_img
+        lbl_img.pack(pady=10)
+        # Área de análise IA
+        frame_ia = tk.Frame(modal, bg="#f7f7f7")
+        frame_ia.pack(fill='x', padx=20, pady=10)
+        json_path = img_path.replace('.png', '.json')
+        def exibir_analise(dados):
+            resumo = dados.get('resumo', '(Sem resumo)')
+            codigo = dados.get('codigo', None)
+            tk.Label(frame_ia, text="Resumo da IA:", font=("Arial", 11, "bold"), bg="#f7f7f7").pack(anchor='w')
+            txt_resumo = tk.Text(frame_ia, font=("Arial", 11), height=4, wrap='word')
+            txt_resumo.pack(fill='x', pady=(0, 8))
+            txt_resumo.insert('1.0', resumo)
+            txt_resumo.config(state='disabled')
+            if codigo:
+                tk.Label(frame_ia, text="Código/Desafio detectado:", font=("Arial", 11, "bold"), bg="#f7f7f7", fg="#1976D2").pack(anchor='w')
+                txt_codigo = tk.Text(frame_ia, font=("Consolas", 10), height=6, wrap='word', bg="#e3eafc")
+                txt_codigo.pack(fill='x', pady=(0, 8))
+                txt_codigo.insert('1.0', codigo)
+                txt_codigo.config(state='disabled')
+        def analisar_ia():
+            frame_ia.pack_forget()
+            frame_loading = tk.Frame(modal, bg="#f7f7f7")
+            frame_loading.pack(fill='x', padx=20, pady=10)
+            lbl = tk.Label(frame_loading, text="Analisando imagem com IA...", font=("Arial", 11, "italic"), bg="#f7f7f7", fg="#1976D2")
+            lbl.pack()
+            def run_ia():
+                try:
+                    print('[IA] Iniciando análise de imagem com IA...')
+                    import base64
+                    import os
+                    from google import genai
+                    from google.genai import types
+                    api_key = os.environ.get("GEMINI_API_KEY") or GEMINI_API_KEY
+                    model = GEMINI_MODEL
+                    print(f'[IA] Usando modelo Gemini para prints: {model}')
+                    client = genai.Client(api_key=api_key)
+                    print(f'[IA] Lendo imagem: {img_path}')
+                    with open(img_path, 'rb') as f:
+                        img_bytes = f.read()
+                    print(f'[IA] Tamanho da imagem (bytes): {len(img_bytes)}')
+                    img_b64 = base64.b64encode(img_bytes).decode('utf-8')
+                    prompt = "Faça um resumo do conteúdo desta imagem. Se houver código de programação ou um desafio de lógica, foque em explicar o que está sendo proposto ou resolvido. Se possível, extraia o código/desafio detectado."
+                    print(f'[IA] Prompt enviado:\n{prompt}')
+                    contents = [
+                        types.Content(
+                            role="user",
+                            parts=[
+                                types.Part(text=prompt),
+                                types.Part(file_data=img_bytes),
+                            ],
+                        ),
+                    ]
+                    print('[IA] Montando configuração de resposta...')
+                    generate_content_config = types.GenerateContentConfig(
+                        response_mime_type="text/plain",
+                    )
+                    print('[IA] Enviando requisição para Gemini...')
+                    resposta = ""
+                    for chunk in client.models.generate_content_stream(
+                        model=model,
+                        contents=contents,
+                        config=generate_content_config,
+                    ):
+                        print(f'[IA][Gemini][chunk] {chunk.text}')
+                        resposta += chunk.text or ""
+                    texto = resposta.strip()
+                    print(f'[IA][Gemini] Resposta completa:\n{texto}\n')
+                    # Simples heurística para separar código do resumo
+                    if '```' in texto:
+                        partes = texto.split('```')
+                        resumo = partes[0].strip()
+                        codigo = partes[1].strip()
+                    else:
+                        resumo = texto.strip()
+                        codigo = None
+                    dados = {"resumo": resumo, "codigo": codigo}
+                    print(f'[IA] Salvando resultado em {json_path}')
+                    with open(json_path, 'w', encoding='utf-8') as f:
+                        json.dump(dados, f, ensure_ascii=False, indent=2)
+                    frame_loading.pack_forget()
+                    frame_ia.pack(fill='x', padx=20, pady=10)
+                    exibir_analise(dados)
+                except Exception as e:
+                    import traceback
+                    print('[IA][ERRO] Exceção ao analisar imagem:')
+                    traceback.print_exc()
+                    frame_loading.pack_forget()
+                    tk.Label(modal, text=f"Erro na análise IA: {e}", font=("Arial", 11), bg="#f7f7f7", fg="#F44336").pack(pady=10)
+            threading.Thread(target=run_ia, daemon=True).start()
+        # Verifica se já existe análise
+        if os.path.exists(json_path):
+            with open(json_path, 'r', encoding='utf-8') as f:
+                dados = json.load(f)
+            exibir_analise(dados)
+            btn_reanalisar = tk.Button(frame_ia, text="Reanalisar com IA", command=analisar_ia, font=("Arial", 10))
+            btn_reanalisar.pack(pady=(8, 0), anchor='e')
+        else:
+            btn_analisar = tk.Button(frame_ia, text="Analisar com IA", command=analisar_ia, font=("Arial", 10))
+            btn_analisar.pack(pady=(8, 0), anchor='e')
 
     def transcrever_selecionado(self):
         print('[DEBUG] transcrever_selecionado chamado')
@@ -848,12 +951,14 @@ class RecorderGUI:
                 img.save(path)
                 print(f'[PRINT] Print salvo: {path}')
                 self._ultimo_print_path = path
-                self._atualizar_aba_prints(path)
                 try:
                     ajustar_permissao_usuario(path)
                 except Exception as e:
                     print(f"[PERMISSAO] Não foi possível ajustar permissões do arquivo: {e}")
                 self.status.config(text="Print de tela capturado com sucesso!", fg="#388E3C")
+                # Atualizar grade de prints se janela de detalhes estiver aberta
+                if hasattr(self, '_frame_prints_canvas') and hasattr(self, '_atualizar_aba_prints_grade'):
+                    self._atualizar_aba_prints_grade()
             else:
                 print('[PRINT] Nenhuma gravação selecionada na grid para salvar o print.')
                 self.status.config(text="Nenhuma gravação selecionada para salvar o print.", fg="#F44336")
@@ -874,19 +979,14 @@ class RecorderGUI:
             keyboard.HotKey.parse('<ctrl>+<alt>+m'),
             on_activate
         )
-        def for_canonical(f):
-            return lambda k: f(self._listener.canonical(k))
         def listen():
             with keyboard.Listener(
-                on_press=for_canonical(hotkey.press),
-                on_release=for_canonical(hotkey.release)
+                on_press=hotkey.press,
+                on_release=hotkey.release
             ) as listener:
-                self._listener = listener
-                try:
-                    listener.join()
-                except Exception as e:
-                    print(f'[HOTKEY] Erro no listener global: {e}')
-                    self.master.after(0, lambda: self.status.config(text="Atalho global não suportado neste ambiente.", fg="#F44336"))
+                print('Aguardando Ctrl+Alt+M global...')
+                listener.join()
+        import threading
         t = threading.Thread(target=listen, daemon=True)
         t.start()
 
