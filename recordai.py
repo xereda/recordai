@@ -19,6 +19,8 @@ import tempfile
 import time
 from collections import defaultdict
 import getpass
+import base64
+from google.genai import types
 
 if sys.version_info < (3, 6):
     print("Python 3.6+ é necessário.")
@@ -751,68 +753,100 @@ class RecorderGUI:
             lbl.pack()
             def run_ia():
                 try:
-                    print('[IA] Iniciando análise de imagem com IA...')
-                    import base64
-                    import os
-                    from google import genai
-                    from google.genai import types
                     api_key = os.environ.get("GEMINI_API_KEY") or GEMINI_API_KEY
                     model = GEMINI_MODEL
-                    print(f'[IA] Usando modelo Gemini para prints: {model}')
-                    client = genai.Client(api_key=api_key)
-                    print(f'[IA] Lendo imagem: {img_path}')
+                    genai.configure(api_key=api_key)
                     with open(img_path, 'rb') as f:
                         img_bytes = f.read()
-                    print(f'[IA] Tamanho da imagem (bytes): {len(img_bytes)}')
-                    img_b64 = base64.b64encode(img_bytes).decode('utf-8')
-                    prompt = "Faça um resumo do conteúdo desta imagem. Se houver código de programação ou um desafio de lógica, foque em explicar o que está sendo proposto ou resolvido. Se possível, extraia o código/desafio detectado."
-                    print(f'[IA] Prompt enviado:\n{prompt}')
-                    contents = [
-                        types.Content(
-                            role="user",
-                            parts=[
-                                types.Part(text=prompt),
-                                types.Part(file_data=img_bytes),
-                            ],
-                        ),
-                    ]
-                    print('[IA] Montando configuração de resposta...')
-                    generate_content_config = types.GenerateContentConfig(
-                        response_mime_type="text/plain",
+                    prompt = """Analise esta imagem e forneça uma análise detalhada em português do Brasil, incluindo:
+
+1. Um resumo conciso do conteúdo visual
+2. Se houver código de programação ou desafio de lógica:
+   - Extraia o código exatamente como aparece
+   - Explique o que está sendo proposto/resolvido
+   - Identifique a linguagem de programação
+3. Se houver texto ou mensagens de erro:
+   - Transcreva o texto exatamente como aparece
+   - Explique o significado ou contexto
+
+Retorne a resposta em formato JSON:
+{
+    "resumo": "resumo do conteúdo visual",
+    "codigo": {
+        "texto": "código detectado (se houver)",
+        "linguagem": "linguagem identificada",
+        "explicacao": "explicação do código"
+    },
+    "texto": {
+        "conteudo": "texto transcrito (se houver)",
+        "explicacao": "explicação do texto"
+    }
+}"""
+                    model = genai.GenerativeModel(GEMINI_MODEL)
+                    response = model.generate_content(
+                        [
+                            {"text": prompt},
+                            {"inline_data": {"mime_type": "image/png", "data": img_bytes}},
+                        ],
+                        generation_config={
+                            "temperature": 0.1,
+                            "top_p": 0.8,
+                            "top_k": 40,
+                            "max_output_tokens": 2048,
+                        },
                     )
-                    print('[IA] Enviando requisição para Gemini...')
-                    resposta = ""
-                    for chunk in client.models.generate_content_stream(
-                        model=model,
-                        contents=contents,
-                        config=generate_content_config,
-                    ):
-                        print(f'[IA][Gemini][chunk] {chunk.text}')
-                        resposta += chunk.text or ""
-                    texto = resposta.strip()
-                    print(f'[IA][Gemini] Resposta completa:\n{texto}\n')
-                    # Simples heurística para separar código do resumo
-                    if '```' in texto:
-                        partes = texto.split('```')
-                        resumo = partes[0].strip()
-                        codigo = partes[1].strip()
-                    else:
-                        resumo = texto.strip()
-                        codigo = None
-                    dados = {"resumo": resumo, "codigo": codigo}
-                    print(f'[IA] Salvando resultado em {json_path}')
-                    with open(json_path, 'w', encoding='utf-8') as f:
-                        json.dump(dados, f, ensure_ascii=False, indent=2)
-                    frame_loading.pack_forget()
-                    frame_ia.pack(fill='x', padx=20, pady=10)
-                    exibir_analise(dados)
+                    try:
+                        resposta = response.text.strip()
+                        # Limpa possíveis blocos de markdown
+                        resposta_limpa = re.sub(r"^```[a-zA-Z]*\n?|```$", "", resposta, flags=re.MULTILINE).strip()
+                        dados = json.loads(resposta_limpa)
+                        # Salva o resultado
+                        with open(json_path, 'w', encoding='utf-8') as f:
+                            json.dump(dados, f, ensure_ascii=False, indent=2)
+                        self.master.after(0, lambda: frame_loading.pack_forget())
+                        self.master.after(0, lambda: frame_ia.pack(fill='x', padx=20, pady=10))
+                        self.master.after(0, lambda: exibir_analise(dados))
+                    except json.JSONDecodeError as e:
+                        def mostrar_erro():
+                            frame_loading.pack_forget()
+                            frame_ia.pack(fill='x', padx=20, pady=10)
+                            for widget in frame_ia.winfo_children():
+                                widget.destroy()
+                            tk.Label(frame_ia, text="Erro ao processar resposta da IA:", font=("Arial", 11, "bold"), fg="#F44336", bg="#f7f7f7").pack(anchor='w', pady=(0, 4))
+                            txt_erro = tk.Text(frame_ia, font=("Consolas", 10), height=8, wrap='word', bg="#fff0f0", fg="#b71c1c")
+                            txt_erro.pack(fill='x', pady=(0, 8))
+                            txt_erro.insert('1.0', resposta_limpa)
+                            txt_erro.config(state='disabled')
+                            def copiar_erro():
+                                modal.clipboard_clear()
+                                modal.clipboard_append(resposta_limpa)
+                            btn_copiar = tk.Button(frame_ia, text="Copiar erro", command=copiar_erro, font=("Arial", 10))
+                            btn_copiar.pack(anchor='e', pady=(0, 8))
+                        self.master.after(0, mostrar_erro)
                 except Exception as e:
-                    import traceback
-                    print('[IA][ERRO] Exceção ao analisar imagem:')
-                    traceback.print_exc()
-                    frame_loading.pack_forget()
-                    tk.Label(modal, text=f"Erro na análise IA: {e}", font=("Arial", 11), bg="#f7f7f7", fg="#F44336").pack(pady=10)
-            threading.Thread(target=run_ia, daemon=True).start()
+                    msg_erro = str(e)
+                    if len(msg_erro) > 400:
+                        msg_erro = msg_erro[:400] + '\n... (mensagem truncada)'
+                    tipo_erro = type(e).__name__
+                    def mostrar_erro():
+                        frame_loading.pack_forget()
+                        frame_ia.pack(fill='x', padx=20, pady=10)
+                        for widget in frame_ia.winfo_children():
+                            widget.destroy()
+                        tk.Label(frame_ia, text=f"Erro ao analisar imagem ({tipo_erro}):", font=("Arial", 11, "bold"), fg="#F44336", bg="#f7f7f7").pack(anchor='w', pady=(0, 4))
+                        txt_erro = tk.Text(frame_ia, font=("Consolas", 10), height=8, wrap='word', bg="#fff0f0", fg="#b71c1c")
+                        txt_erro.pack(fill='x', pady=(0, 8))
+                        txt_erro.insert('1.0', msg_erro)
+                        txt_erro.config(state='disabled')
+                        def copiar_erro():
+                            modal.clipboard_clear()
+                            modal.clipboard_append(str(e))
+                        btn_copiar = tk.Button(frame_ia, text="Copiar erro", command=copiar_erro, font=("Arial", 10))
+                        btn_copiar.pack(anchor='e', pady=(0, 8))
+                    self.master.after(0, mostrar_erro)
+            import threading
+            t = threading.Thread(target=run_ia, daemon=True)
+            t.start()
         # Verifica se já existe análise
         if os.path.exists(json_path):
             with open(json_path, 'r', encoding='utf-8') as f:
