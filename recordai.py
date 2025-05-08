@@ -21,6 +21,8 @@ from collections import defaultdict
 import getpass
 import base64
 from google.genai import types
+from markdown import markdown as md2html
+from tkinterweb import HtmlFrame
 
 if sys.version_info < (3, 6):
     print("Python 3.6+ é necessário.")
@@ -597,6 +599,8 @@ class RecorderGUI:
         from tkinter import ttk
         import os, json
         from datetime import datetime
+        from markdown import markdown as md2html
+        from tkinterweb import HtmlFrame
         files = [f for f in os.listdir(gravacao_dir) if f.endswith('.ogg')]
         files.sort()
         if not files:
@@ -631,44 +635,132 @@ class RecorderGUI:
             pontos_ia_lista = [str(pontos_ia)]
         detalhes = tk.Toplevel(self.master)
         detalhes.title(f"Detalhes da Gravação: {os.path.basename(gravacao_dir)}")
-        detalhes.geometry("800x700")
+        # Maximizar multiplataforma: apenas ajusta geometry para ocupar toda a tela, mantendo barra de título
+        largura = detalhes.winfo_screenwidth()
+        altura = detalhes.winfo_screenheight()
+        detalhes.geometry(f"{largura}x{altura}+0+0")
         detalhes.configure(bg="#f7f7f7")
-        # Notebook (abas)
-        notebook = ttk.Notebook(detalhes)
-        notebook.pack(fill='both', expand=True, padx=10, pady=10)
-        # Aba Texto
-        frame_texto = tk.Frame(notebook, bg="#f7f7f7")
-        notebook.add(frame_texto, text="Texto")
-        tk.Label(frame_texto, text=f"Data/Hora: {data}", font=("Arial", 11, "bold"), bg="#f7f7f7").pack(anchor='w', padx=16, pady=(16, 4))
-        tk.Label(frame_texto, text="Título:", font=("Arial", 11, "bold"), bg="#f7f7f7").pack(anchor='w', padx=16, pady=(8, 0))
-        self.titulo_var = tk.StringVar(value=titulo_ia)
-        tk.Entry(frame_texto, textvariable=self.titulo_var, font=("Arial", 12), width=60, state='readonly').pack(anchor='w', padx=16, pady=(0, 8))
-        tk.Label(frame_texto, text="Transcrição:", font=("Arial", 11, "bold"), bg="#f7f7f7").pack(anchor='w', padx=16, pady=(8, 0))
-        txt_transc = tk.Text(frame_texto, font=("Arial", 12), height=10, wrap='word')
+        # Não usar state('zoomed') nem fullscreen
+        PAD = 24
+        BG_CARD = "#e3eafc"
+        BG_MODAL = "#f7f7f7"
+        FG_TITLE = "#222"
+        # Frame principal horizontal
+        main_frame = tk.Frame(detalhes, bg=BG_MODAL)
+        main_frame.pack(fill='both', expand=True)
+        left_frame = tk.Frame(main_frame, bg=BG_MODAL, width=detalhes.winfo_screenwidth()//2)
+        left_frame.pack(side='left', fill='both', expand=True)
+        right_frame = tk.Frame(main_frame, bg=BG_MODAL, width=detalhes.winfo_screenwidth()//2)
+        right_frame.pack(side='right', fill='both', expand=True)
+        # --- PARTE ESQUERDA: conteúdo atual ---
+        titulo_modal = tk.Label(detalhes, text="Detalhes da Gravação", font=("Arial", 18, "bold"), bg=BG_MODAL, fg=FG_TITLE, anchor='w')
+        titulo_modal.place(x=PAD, y=PAD)
+        # Remover botão fechar customizado
+        # btn_fechar = tk.Button(detalhes, text="✕", ...)
+        # ...restante do código segue igual...
+        # Dados principais
+        card_info = tk.Frame(left_frame, bg=BG_CARD, bd=0, highlightbackground="#b3c6e6", highlightthickness=1)
+        card_info.pack(fill='x', padx=PAD, pady=(PAD*2, 8))
+        tk.Label(card_info, text=f"Data/Hora: {data}", font=("Arial", 12, "bold"), bg=BG_CARD).pack(anchor='w', padx=16, pady=(12, 2))
+        tk.Label(card_info, text="Título:", font=("Arial", 11, "bold"), bg=BG_CARD).pack(anchor='w', padx=16, pady=(8, 0))
+        titulo_var = tk.StringVar(value=titulo_ia)
+        tk.Entry(card_info, textvariable=titulo_var, font=("Arial", 12), width=60, state='readonly').pack(anchor='w', padx=16, pady=(0, 8))
+        # Transcrição
+        tk.Label(card_info, text="Transcrição:", font=("Arial", 11, "bold"), bg=BG_CARD).pack(anchor='w', padx=16, pady=(8, 0))
+        txt_transc = tk.Text(card_info, font=("Arial", 12), height=10, wrap='word')
         txt_transc.pack(fill='both', expand=False, padx=16, pady=(0, 8))
         txt_transc.insert('1.0', transcricao)
         txt_transc.config(state='disabled')
-        tk.Label(frame_texto, text="Resumo:", font=("Arial", 11, "bold"), bg="#f7f7f7").pack(anchor='w', padx=16, pady=(8, 0))
-        txt_resumo = tk.Text(frame_texto, font=("Arial", 12), height=6, wrap='word')
+        # Resumo
+        tk.Label(card_info, text="Resumo:", font=("Arial", 11, "bold"), bg=BG_CARD).pack(anchor='w', padx=16, pady=(8, 0))
+        txt_resumo = tk.Text(card_info, font=("Arial", 12), height=6, wrap='word')
         txt_resumo.pack(fill='both', expand=False, padx=16, pady=(0, 8))
         txt_resumo.insert('1.0', resumo_ia)
         txt_resumo.config(state='disabled')
-        tk.Label(frame_texto, text="Principais Pontos:", font=("Arial", 11, "bold"), bg="#f7f7f7").pack(anchor='w', padx=16, pady=(8, 0))
-        txt_pontos = tk.Text(frame_texto, font=("Arial", 12), height=8, wrap='word')
+        # Pontos
+        tk.Label(card_info, text="Principais Pontos:", font=("Arial", 11, "bold"), bg=BG_CARD).pack(anchor='w', padx=16, pady=(8, 0))
+        txt_pontos = tk.Text(card_info, font=("Arial", 12), height=8, wrap='word')
         txt_pontos.pack(fill='both', expand=False, padx=16, pady=(0, 16))
         txt_pontos.insert('1.0', '\n'.join(f'- {item}' for item in pontos_ia_lista))
         txt_pontos.config(state='disabled')
-        # Aba Prints - miniaturas em grade rolável
-        frame_imgs = tk.Frame(notebook, bg="#f7f7f7")
-        notebook.add(frame_imgs, text="Prints")
+        # Prints
+        tk.Label(left_frame, text="Prints:", font=("Arial", 13, "bold"), bg=BG_MODAL, anchor='w').pack(anchor='w', padx=PAD, pady=(8, 0))
+        frame_imgs = tk.Frame(left_frame, bg=BG_MODAL)
+        frame_imgs.pack(fill='both', expand=True, padx=PAD, pady=(4, PAD))
         self._detalhes_frame_imgs = frame_imgs
         self._detalhes_gravacao_dir = gravacao_dir
-        self._detalhes_imgs_refs = []  # manter referências
+        self._detalhes_imgs_refs = []
         btn_atualizar = tk.Button(frame_imgs, text="Atualizar Prints", command=self._atualizar_aba_prints_grade, font=("Arial", 10))
         btn_atualizar.pack(anchor='ne', padx=10, pady=5)
-        self._frame_prints_canvas = tk.Frame(frame_imgs, bg="#f7f7f7")
+        self._frame_prints_canvas = tk.Frame(frame_imgs, bg=BG_MODAL)
         self._frame_prints_canvas.pack(fill='both', expand=True)
         self._atualizar_aba_prints_grade()
+        # --- PARTE DIREITA: pergunta IA ---
+        frame_pergunta = tk.Frame(right_frame, bg=BG_MODAL)
+        frame_pergunta.pack(fill='x', padx=PAD, pady=(PAD*2, 10), anchor='n')
+        tk.Label(frame_pergunta, text="Pergunte algo sobre esta gravação:", font=("Arial", 13, "bold"), bg=BG_MODAL).pack(anchor='w', padx=2, pady=(0, 2))
+        pergunta_var = tk.StringVar()
+        entry_pergunta = tk.Entry(frame_pergunta, textvariable=pergunta_var, font=("Arial", 12), width=40)
+        entry_pergunta.pack(side='left', padx=(0, 8), pady=2, fill='x', expand=True)
+        btn_perguntar = tk.Button(frame_pergunta, text="Perguntar", font=("Arial", 11, "bold"), bg="#388E3C", fg="white")
+        btn_perguntar.pack(side='left', ipadx=10, ipady=2)
+        entry_pergunta.bind('<Return>', lambda e: btn_perguntar.invoke())
+        # Resposta IA (markdown)
+        tk.Label(right_frame, text="Resposta da IA:", font=("Arial", 13, "bold"), bg=BG_MODAL, anchor='w').pack(anchor='w', padx=PAD, pady=(8, 0))
+        card_resposta = tk.Frame(right_frame, bg=BG_CARD, bd=0, highlightbackground="#b3c6e6", highlightthickness=1)
+        card_resposta.pack(fill='both', expand=True, padx=PAD, pady=(4, PAD))
+        resposta_markdown = tk.StringVar(value="")
+        def set_resposta_markdown(md):
+            resposta_markdown.set(md)
+            for widget in card_resposta.winfo_children():
+                widget.destroy()
+            html = md2html(md, extensions=['fenced_code', 'codehilite'])
+            html = html.replace('<pre>', '<pre style="background:#f4f4f4;border:1px solid #b3c6e6;padding:8px;border-radius:6px;overflow-x:auto;font-family:monospace;font-size:13px;">')
+            html = html.replace('<code>', '<code style="font-family:monospace;font-size:13px;">')
+            html_frame = HtmlFrame(card_resposta, messages_enabled=False, vertical_scrollbar=True)
+            html_frame.load_html(html)
+            html_frame.pack(fill='both', expand=True, padx=18, pady=(12, 0))
+            # Botão copiar resposta
+            btn_frame_resposta = tk.Frame(card_resposta, bg=BG_CARD)
+            btn_frame_resposta.pack(fill='x', padx=18, pady=(8, 10), anchor='s')
+            def copiar_resposta():
+                detalhes.clipboard_clear()
+                detalhes.clipboard_append(md)
+                btn_copiar_resp.config(text="Copiado!", bg="#a5d6a7")
+                detalhes.after(2000, lambda: btn_copiar_resp.config(text="Copiar resposta", bg="#b3c6e6"))
+            btn_copiar_resp = tk.Button(btn_frame_resposta, text="Copiar resposta", command=copiar_resposta, font=("Arial", 10), bg="#b3c6e6", relief=tk.RAISED)
+            btn_copiar_resp.pack(side='left', padx=(0, 8), ipadx=8, ipady=2)
+        set_resposta_markdown("")
+        # Função para perguntar à IA e exibir resposta em markdown
+        def perguntar_ia():
+            pergunta = pergunta_var.get().strip()
+            if not pergunta:
+                set_resposta_markdown("Digite uma pergunta.")
+                return
+            btn_perguntar.config(state=tk.DISABLED)
+            set_resposta_markdown("Consultando IA...")
+            texto_base = transcricao
+            def run_ia_pergunta():
+                try:
+                    import os
+                    api_key = os.environ.get("GEMINI_API_KEY") or GEMINI_API_KEY
+                    model = GEMINI_MODEL
+                    genai.configure(api_key=api_key)
+                    prompt = f"""Você receberá a transcrição de uma gravação de áudio. Use esse texto como contexto para responder a pergunta do usuário, sempre em português do Brasil. Seja objetivo e claro.\n\nTranscrição:\n{texto_base}\n\nPergunta do usuário:\n{pergunta}\n\nResponda de forma clara, objetiva e, se possível, cite trechos da transcrição que embasam sua resposta. Use markdown bem formatado."""
+                    model = genai.GenerativeModel(GEMINI_MODEL)
+                    response = model.generate_content(prompt)
+                    resposta = response.text.strip()
+                    self.master.after(0, lambda: set_resposta_markdown(resposta))
+                except Exception as e:
+                    msg_erro = str(e)
+                    if len(msg_erro) > 400:
+                        msg_erro = msg_erro[:400] + '\n... (mensagem truncada)'
+                    self.master.after(0, lambda: set_resposta_markdown(f"Erro ao consultar IA: {msg_erro}"))
+                finally:
+                    self.master.after(0, lambda: btn_perguntar.config(state=tk.NORMAL))
+            import threading
+            threading.Thread(target=run_ia_pergunta, daemon=True).start()
+        btn_perguntar.config(command=perguntar_ia)
 
     def _atualizar_aba_prints_grade(self):
         import tkinter as tk
@@ -735,20 +827,39 @@ class RecorderGUI:
         else:
             modal = tk.Toplevel(self.master)
             modal.title(f"Print: {os.path.basename(img_path)}")
-            modal.geometry("700x750")
+            modal.geometry(f"{modal.winfo_screenwidth()}x{modal.winfo_screenheight()}+0+0")
             modal.configure(bg="#f7f7f7")
+            modal.attributes('-fullscreen', True)
+        # Padronização visual
+        PAD = 24
+        BG_CARD = "#e3eafc"
+        BG_MODAL = "#f7f7f7"
+        FG_TITLE = "#222"
+        # Frame principal horizontal
+        main_frame = tk.Frame(modal, bg=BG_MODAL)
+        main_frame.pack(fill='both', expand=True)
+        left_frame = tk.Frame(main_frame, bg=BG_MODAL, width=modal.winfo_screenwidth()//2)
+        left_frame.pack(side='left', fill='both', expand=True)
+        right_frame = tk.Frame(main_frame, bg=BG_MODAL, width=modal.winfo_screenwidth()//2)
+        right_frame.pack(side='right', fill='both', expand=True)
+        # --- PARTE ESQUERDA: Imagem + Resumo IA ---
+        # Título e botão fechar
+        titulo_modal = tk.Label(modal, text="Detalhes do Print", font=("Arial", 18, "bold"), bg=BG_MODAL, fg=FG_TITLE, anchor='w')
+        titulo_modal.place(x=PAD, y=PAD)
+        btn_fechar = tk.Button(modal, text="✕", font=("Arial", 14, "bold"), bg=BG_MODAL, fg="#b71c1c", bd=0, relief='flat', command=modal.destroy, cursor='hand2', highlightthickness=0, activebackground=BG_MODAL)
+        btn_fechar.place(relx=1.0, x=-PAD, y=PAD, anchor='ne')
+        # Imagem
         img = Image.open(img_path)
-        img.thumbnail((650, 400))
+        img.thumbnail((modal.winfo_screenwidth()//2 - 2*PAD, 400))
         tk_img = ImageTk.PhotoImage(img)
-        lbl_img = tk.Label(modal, image=tk_img, bg="#f7f7f7")
+        lbl_img = tk.Label(left_frame, image=tk_img, bg=BG_MODAL)
         lbl_img.image = tk_img
-        lbl_img.pack(pady=(18, 10))
+        lbl_img.pack(pady=(PAD*2, 8), padx=PAD, anchor='n')
         def abrir_imagem_original(event=None):
             import platform, subprocess, os
             path_abs = os.path.abspath(img_path)
             try:
                 if platform.system() == "Linux":
-                    # xdg-open pode retornar imediatamente, não bloqueia
                     subprocess.Popen(["xdg-open", path_abs], start_new_session=True)
                 elif platform.system() == "Darwin":
                     subprocess.Popen(["open", path_abs], start_new_session=True)
@@ -761,112 +872,106 @@ class RecorderGUI:
                 from tkinter import messagebox
                 messagebox.showerror("Erro", f"Erro ao abrir a imagem: {e}")
         lbl_img.bind('<Double-Button-1>', abrir_imagem_original)
-        frame_ia = tk.Frame(modal, bg="#f7f7f7")
-        frame_ia.pack(fill='x', padx=20, pady=(0, 20))
+        # Resumo IA (markdown -> HTML)
         md_path = img_path.replace('.png', '.md')
-        def exibir_analise_markdown(markdown_text):
-            for widget in frame_ia.winfo_children():
+        markdown_text = ''
+        if os.path.exists(md_path):
+            with open(md_path, 'r', encoding='utf-8') as f:
+                markdown_text = f.read()
+        tk.Label(left_frame, text="Resumo IA:", font=("Arial", 13, "bold"), bg=BG_MODAL, anchor='w').pack(anchor='w', padx=PAD, pady=(8, 0))
+        card_analise = tk.Frame(left_frame, bg=BG_CARD, bd=0, highlightbackground="#b3c6e6", highlightthickness=1)
+        card_analise.pack(fill='both', expand=True, padx=PAD, pady=(4, PAD))
+        def exibir_analise_markdown(md):
+            for widget in card_analise.winfo_children():
                 widget.destroy()
-            card = tk.Frame(frame_ia, bg="#e3eafc", bd=0, highlightbackground="#b3c6e6", highlightthickness=1)
-            card.pack(fill='both', expand=True, padx=0, pady=0)
-            try:
-                import tkmarkdown
-                md_widget = tkmarkdown.Markdown(card, text=markdown_text, font=("Arial", 12), bg="#e3eafc", borderwidth=0, highlightthickness=0)
-                md_widget.pack(fill='both', expand=True, padx=18, pady=(18, 8))
-            except ImportError:
-                txt = tk.Text(card, font=("Consolas", 11), height=16, wrap='word', bg="#e3eafc", relief='flat', bd=0)
-                txt.pack(fill='both', expand=True, padx=18, pady=(18, 8))
-                txt.insert('1.0', markdown_text)
-                txt.config(state='disabled')
-            btn_frame = tk.Frame(card, bg="#e3eafc")
-            btn_frame.pack(fill='x', padx=18, pady=(0, 14))
+            html = md2html(md, extensions=['fenced_code', 'codehilite'])
+            # Adiciona estilo inline para blocos de código
+            html = html.replace('<pre>', '<pre style="background:#f4f4f4;border:1px solid #b3c6e6;padding:8px;border-radius:6px;overflow-x:auto;font-family:monospace;font-size:13px;">')
+            html = html.replace('<code>', '<code style="font-family:monospace;font-size:13px;">')
+            html_frame = HtmlFrame(card_analise, messages_enabled=False, vertical_scrollbar=True)
+            html_frame.load_html(html)
+            html_frame.pack(fill='both', expand=True, padx=18, pady=(12, 0))
+            # Botões (sempre visíveis abaixo do HtmlFrame)
+            btn_frame = tk.Frame(card_analise, bg=BG_CARD)
+            btn_frame.pack(fill='x', padx=18, pady=(8, 10), anchor='s')
             def copiar_resultado():
                 modal.clipboard_clear()
-                modal.clipboard_append(markdown_text)
+                modal.clipboard_append(md)
+                btn_copiar.config(text="Copiado!", bg="#a5d6a7")
+                modal.after(2000, lambda: btn_copiar.config(text="Copiar resultado", bg="#b3c6e6"))
             btn_copiar = tk.Button(btn_frame, text="Copiar resultado", command=copiar_resultado, font=("Arial", 10), bg="#b3c6e6", relief=tk.RAISED)
             btn_copiar.pack(side='left', padx=(0, 8), ipadx=8, ipady=2)
-            btn_reanalisar = tk.Button(btn_frame, text="Reanalisar IA", command=analisar_ia, font=("Arial", 10), bg="#1976D2", fg="white", relief=tk.RAISED)
+            def reanalisar_ia():
+                self.analisar_ia()
+            btn_reanalisar = tk.Button(btn_frame, text="Reanalisar IA", command=reanalisar_ia, font=("Arial", 10), bg="#1976D2", fg="white", relief=tk.RAISED)
             btn_reanalisar.pack(side='right', ipadx=8, ipady=2)
-        def analisar_ia():
-            frame_ia.pack_forget()
-            frame_loading = tk.Frame(modal, bg="#f7f7f7")
-            frame_loading.pack(fill='x', padx=20, pady=10)
-            lbl = tk.Label(frame_loading, text="Analisando imagem com IA...", font=("Arial", 11, "italic"), bg="#f7f7f7", fg="#1976D2")
-            lbl.pack()
-            def run_ia():
+        exibir_analise_markdown(markdown_text)
+        # --- PARTE DIREITA: Pergunta + Resposta IA ---
+        frame_pergunta = tk.Frame(right_frame, bg=BG_MODAL)
+        frame_pergunta.pack(fill='x', padx=PAD, pady=(PAD*2, 10), anchor='n')
+        tk.Label(frame_pergunta, text="Pergunte algo sobre este print:", font=("Arial", 13, "bold"), bg=BG_MODAL).pack(anchor='w', padx=2, pady=(0, 2))
+        pergunta_var = tk.StringVar()
+        entry_pergunta = tk.Entry(frame_pergunta, textvariable=pergunta_var, font=("Arial", 12), width=40)
+        entry_pergunta.pack(side='left', padx=(0, 8), pady=2, fill='x', expand=True)
+        btn_perguntar = tk.Button(frame_pergunta, text="Perguntar", font=("Arial", 11, "bold"), bg="#388E3C", fg="white")
+        btn_perguntar.pack(side='left', ipadx=10, ipady=2)
+        entry_pergunta.bind('<Return>', lambda e: btn_perguntar.invoke())
+        # Resposta IA (markdown)
+        tk.Label(right_frame, text="Resposta da IA:", font=("Arial", 13, "bold"), bg=BG_MODAL, anchor='w').pack(anchor='w', padx=PAD, pady=(8, 0))
+        card_resposta = tk.Frame(right_frame, bg=BG_CARD, bd=0, highlightbackground="#b3c6e6", highlightthickness=1)
+        card_resposta.pack(fill='both', expand=True, padx=PAD, pady=(4, PAD))
+        resposta_markdown = tk.StringVar(value="")
+        def set_resposta_markdown(md):
+            resposta_markdown.set(md)
+            for widget in card_resposta.winfo_children():
+                widget.destroy()
+            html = md2html(md, extensions=['fenced_code', 'codehilite'])
+            html = html.replace('<pre>', '<pre style="background:#f4f4f4;border:1px solid #b3c6e6;padding:8px;border-radius:6px;overflow-x:auto;font-family:monospace;font-size:13px;">')
+            html = html.replace('<code>', '<code style="font-family:monospace;font-size:13px;">')
+            html_frame = HtmlFrame(card_resposta, messages_enabled=False, vertical_scrollbar=True)
+            html_frame.load_html(html)
+            html_frame.pack(fill='both', expand=True, padx=18, pady=(12, 0))
+            # Botão copiar resposta (sempre visível abaixo do HtmlFrame)
+            btn_frame_resposta = tk.Frame(card_resposta, bg=BG_CARD)
+            btn_frame_resposta.pack(fill='x', padx=18, pady=(8, 10), anchor='s')
+            def copiar_resposta():
+                modal.clipboard_clear()
+                modal.clipboard_append(md)
+                btn_copiar_resp.config(text="Copiado!", bg="#a5d6a7")
+                modal.after(2000, lambda: btn_copiar_resp.config(text="Copiar resposta", bg="#b3c6e6"))
+            btn_copiar_resp = tk.Button(btn_frame_resposta, text="Copiar resposta", command=copiar_resposta, font=("Arial", 10), bg="#b3c6e6", relief=tk.RAISED)
+            btn_copiar_resp.pack(side='left', padx=(0, 8), ipadx=8, ipady=2)
+        set_resposta_markdown("")
+        # Função para perguntar à IA e exibir resposta em markdown
+        def perguntar_ia():
+            pergunta = pergunta_var.get().strip()
+            if not pergunta:
+                set_resposta_markdown("Digite uma pergunta.")
+                return
+            btn_perguntar.config(state=tk.DISABLED)
+            set_resposta_markdown("Consultando IA...")
+            texto_base = transcricao
+            def run_ia_pergunta():
                 try:
+                    import os
                     api_key = os.environ.get("GEMINI_API_KEY") or GEMINI_API_KEY
                     model = GEMINI_MODEL
                     genai.configure(api_key=api_key)
-                    with open(img_path, 'rb') as f:
-                        img_bytes = f.read()
-                    prompt = """Analise esta imagem e forneça uma análise detalhada em português do Brasil, incluindo:\n\n1. Um resumo conciso do conteúdo visual\n2. Se houver código de programação, desafio de código, questão de prova ou questionário:\n   - Extraia o código ou a questão exatamente como aparece\n   - Explique o que está sendo proposto/resolvido\n   - Identifique a linguagem de programação (se aplicável)\n   - Gere uma resposta objetiva para a questão/código/desafio, se possível, e inclua como um tópico final chamado 'Resposta Objetiva'\n3. Se houver texto ou mensagens de erro:\n   - Transcreva o texto exatamente como aparece\n   - Explique o significado ou contexto\n\nRetorne a resposta EXCLUSIVAMENTE em markdown bem formatado, com títulos, listas, blocos de código e destaques conforme apropriado. Não inclua explicações fora do markdown.\n\nExemplo de estrutura sugerida:\n\n# Resumo\n...\n\n# Código ou Questão Detectada\n```python\n...\n```\n\n## Explicação\n...\n\n## Resposta Objetiva\n...\n\n# Texto Detectado\n...\n\n# Mensagens de Erro\n...\n\nSe algum item não existir, omita a seção correspondente."""
+                    prompt = f"""Você receberá a transcrição de uma gravação de áudio. Use esse texto como contexto para responder a pergunta do usuário, sempre em português do Brasil. Seja objetivo e claro.\n\nTranscrição:\n{texto_base}\n\nPergunta do usuário:\n{pergunta}\n\nResponda de forma clara, objetiva e, se possível, cite trechos da transcrição que embasam sua resposta. Use markdown bem formatado."""
                     model = genai.GenerativeModel(GEMINI_MODEL)
-                    response = model.generate_content(
-                        [
-                            {"text": prompt},
-                            {"inline_data": {"mime_type": "image/png", "data": img_bytes}},
-                        ],
-                        generation_config={
-                            "temperature": 0.1,
-                            "top_p": 0.8,
-                            "top_k": 40,
-                            "max_output_tokens": 2048,
-                        },
-                    )
+                    response = model.generate_content(prompt)
                     resposta = response.text.strip()
-                    resposta_limpa = re.sub(r"^```[a-zA-Z]*\n?|```$", "", resposta, flags=re.MULTILINE).strip()
-                    with open(md_path, 'w', encoding='utf-8') as f:
-                        f.write(resposta_limpa)
-                    self.master.after(0, lambda: frame_loading.pack_forget())
-                    self.master.after(0, lambda: frame_ia.pack(fill='x', padx=20, pady=10))
-                    self.master.after(0, lambda: exibir_analise_markdown(resposta_limpa))
+                    self.master.after(0, lambda: set_resposta_markdown(resposta))
                 except Exception as e:
                     msg_erro = str(e)
                     if len(msg_erro) > 400:
                         msg_erro = msg_erro[:400] + '\n... (mensagem truncada)'
-                    def mostrar_erro():
-                        frame_loading.pack_forget()
-                        frame_ia.pack(fill='x', padx=20, pady=10)
-                        for widget in frame_ia.winfo_children():
-                            widget.destroy()
-                        card = tk.Frame(frame_ia, bg="#fff0f0", bd=0, highlightbackground="#f44336", highlightthickness=1)
-                        card.pack(fill='both', expand=True, padx=0, pady=0)
-                        txt_erro = tk.Text(card, font=("Consolas", 10), height=10, wrap='word', bg="#fff0f0", fg="#b71c1c", relief='flat', bd=0)
-                        txt_erro.pack(fill='both', expand=True, padx=18, pady=(18, 8))
-                        txt_erro.insert('1.0', msg_erro)
-                        txt_erro.config(state='disabled')
-                        def copiar_erro():
-                            modal.clipboard_clear()
-                            modal.clipboard_append(str(e))
-                        btn_frame = tk.Frame(card, bg="#fff0f0")
-                        btn_frame.pack(fill='x', padx=18, pady=(0, 14))
-                        btn_copiar = tk.Button(btn_frame, text="Copiar erro", command=copiar_erro, font=("Arial", 10), bg="#ffcdd2", relief=tk.RAISED)
-                        btn_copiar.pack(side='left', padx=(0, 8), ipadx=8, ipady=2)
-                        btn_reanalisar = tk.Button(btn_frame, text="Reanalisar IA", command=analisar_ia, font=("Arial", 10), bg="#1976D2", fg="white", relief=tk.RAISED)
-                        btn_reanalisar.pack(side='right', ipadx=8, ipady=2)
-                    self.master.after(0, mostrar_erro)
+                    self.master.after(0, lambda: set_resposta_markdown(f"Erro ao consultar IA: {msg_erro}"))
+                finally:
+                    self.master.after(0, lambda: btn_perguntar.config(state=tk.NORMAL))
             import threading
-            t = threading.Thread(target=run_ia, daemon=True)
-            t.start()
-        # Exibe análise existente ou botão para analisar
-        if os.path.exists(md_path):
-            with open(md_path, 'r', encoding='utf-8') as f:
-                markdown_text = f.read()
-            exibir_analise_markdown(markdown_text)
-        else:
-            for widget in frame_ia.winfo_children():
-                widget.destroy()
-            card = tk.Frame(frame_ia, bg="#e3eafc", bd=0, highlightbackground="#b3c6e6", highlightthickness=1)
-            card.pack(fill='both', expand=True, padx=0, pady=0)
-            lbl = tk.Label(card, text="Nenhuma análise encontrada para este print.", font=("Arial", 12, "italic"), bg="#e3eafc", fg="#888")
-            lbl.pack(padx=18, pady=(18, 8), anchor='w')
-            btn_frame = tk.Frame(card, bg="#e3eafc")
-            btn_frame.pack(fill='x', padx=18, pady=(0, 14))
-            btn_analisar = tk.Button(btn_frame, text="Analisar com IA", command=analisar_ia, font=("Arial", 10), bg="#1976D2", fg="white", relief=tk.RAISED)
-            btn_analisar.pack(side='right', ipadx=8, ipady=2)
-        if auto_ia:
-            modal.after(200, analisar_ia)
+            threading.Thread(target=run_ia_pergunta, daemon=True).start()
+        btn_perguntar.config(command=perguntar_ia)
 
     def transcrever_selecionado(self):
         print('[DEBUG] transcrever_selecionado chamado')
