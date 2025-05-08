@@ -1,6 +1,6 @@
 # RecordAI
 
-**RecordAI** é uma aplicação gráfica para Linux que grava automaticamente a saída de áudio do sistema (tudo que toca nos alto-falantes/fones) e/ou microfone, salva os áudios em arquivos compactados `.ogg` (Opus), permite transcrever o conteúdo gravado e gerar resumos inteligentes com IA (Google Gemini). Possui interface moderna para gerenciar, reproduzir, excluir e detalhar gravações.
+**RecordAI** é uma aplicação gráfica para Linux que grava automaticamente a saída de áudio do sistema (tudo que toca nos alto-falantes/fones) e/ou microfone, salva os áudios em arquivos compactados `.ogg` (Opus), permite transcrever o conteúdo gravado e gerar resumos inteligentes com IA (Google Gemini). Possui interface moderna para gerenciar, reproduzir, excluir, detalhar gravações **e capturar prints de tela do monitor do mouse, com análise automática via IA**.
 
 ---
 
@@ -12,7 +12,9 @@
 - Reproduz, exclui, abre pastas e apaga todas as gravações facilmente.
 - Transcreve automaticamente o áudio gravado para texto (Google Speech Recognition).
 - Gera título, resumo e principais pontos da gravação usando IA (Google Gemini).
-- Visualização detalhada de cada gravação, incluindo transcrição e análise da IA.
+- **Captura prints de tela do monitor do mouse (atalho Ctrl+Alt+M), vinculando-os à gravação selecionada.**
+- **Analisa prints de tela com IA (Google Gemini), exibindo resultado em markdown (com ou sem tkmarkdown).**
+- Visualização detalhada de cada gravação, incluindo transcrição, análise da IA e prints capturados.
 - Compatível com Ubuntu 24+ (PipeWire ou PulseAudio).
 
 ---
@@ -43,11 +45,17 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
+> **Opcional:** Para exibir resultados de análise de prints em markdown formatado na interface, instale também:
+> 
+> ```bash
+> pip install tkmarkdown
+> ```
+
 ---
 
 ## Configuração de Variáveis de Ambiente
 
-Para usar as funcionalidades de IA (resumo/título/pontos), é necessário configurar a API do Google Gemini. Crie um arquivo `.env` na raiz do projeto com o seguinte conteúdo:
+Para usar as funcionalidades de IA (resumo/título/pontos e análise de prints), é necessário configurar a API do Google Gemini. Crie um arquivo `.env` na raiz do projeto com o seguinte conteúdo:
 
 ```
 GEMINI_API_KEY=seu_token_google_gemini
@@ -85,20 +93,24 @@ RECORD_BLOCK_SECONDS=240
    pip install -r requirements.txt
    ```
 
-4. **(Opcional) Configure o arquivo `.env` para recursos de IA.**
+4. **(Opcional) Instale o tkmarkdown para visualização avançada de markdown.**
 
-5. **Execute a aplicação:**
+5. **(Opcional) Configure o arquivo `.env` para recursos de IA.**
+
+6. **Execute a aplicação:**
 
    ```bash
    python3 recordai.py
    ```
 
-6. **Na interface:**
+7. **Na interface:**
    - Clique em **Iniciar Gravação** para começar a gravar.
    - Clique em **Encerrar Gravação** para finalizar e salvar.
    - Use os botões para reproduzir, excluir, abrir pasta ou apagar todas as gravações.
    - Use **Transcrever** para gerar o texto do áudio.
    - Use **Aplicar IA** para gerar título, resumo e pontos principais.
+   - **Selecione uma gravação e pressione Ctrl+Alt+M para capturar um print do monitor do mouse.**
+   - Prints capturados aparecem na aba "Prints" dos detalhes da gravação, podendo ser analisados por IA.
    - As gravações ficam na pasta `output/`.
 
 ---
@@ -109,9 +121,9 @@ RECORD_BLOCK_SECONDS=240
 recordai/
 ├── recordai.py         # Script principal com interface gráfica
 ├── requirements.txt    # Dependências Python
-├── output/             # Pasta onde os arquivos .ogg gravados são salvos
+├── output/             # Pasta onde os arquivos .ogg gravados e prints são salvos
 │   └── .gitkeep        # Mantém a pasta no repositório
-├── .gitignore          # Ignora arquivos de áudio, .env e venv
+├── .gitignore          # Ignora arquivos de áudio, prints, .env e venv
 └── README.md           # Este arquivo
 ```
 
@@ -124,13 +136,18 @@ recordai/
 - Arquivos são salvos em OGG/Opus, ideais para voz e música.
 - Não é necessário configurar nada no PulseAudio/PipeWire ou usar pavucontrol.
 - A transcrição utiliza Google Speech Recognition (necessita conexão com a internet).
-- O resumo com IA utiliza a API do Google Gemini (necessita chave e internet).
+- O resumo com IA e a análise de prints utilizam a API do Google Gemini (necessita chave e internet).
+- **Captura de prints:**
+  - Atalho local: Ctrl+Alt+M (funciona apenas com a janela da aplicação em foco).
+  - Atalho global: Ctrl+Alt+M (funciona em todo o sistema, requer sudo e X11).
+  - Prints são salvos na gravação selecionada e podem ser analisados por IA.
+  - Resultado da análise é exibido em markdown (se `tkmarkdown` instalado, com formatação avançada).
 
 ---
 
 ## Observação sobre Atalhos Globais no Linux
 
-Para que o recurso de atalho global (ex: Ctrl+Alt+S) funcione no Linux, é necessário rodar a aplicação como root, pois a biblioteca `keyboard` exige permissões elevadas para capturar teclas globalmente.
+Para que o recurso de atalho global (ex: Ctrl+Alt+M) funcione no Linux, é necessário rodar a aplicação como root, pois a biblioteca `pynput` exige permissões elevadas para capturar teclas globalmente.
 
 **Como rodar:**
 

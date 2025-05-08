@@ -681,7 +681,9 @@ class RecorderGUI:
         gravacao_dir = getattr(self, '_detalhes_gravacao_dir', None)
         if not gravacao_dir:
             return
-        prints = sorted(glob(os.path.join(gravacao_dir, 'print_*.png')))
+        prints = glob(os.path.join(gravacao_dir, 'print_*.png'))
+        # Ordenar por data de criação (mais recente primeiro)
+        prints = sorted(prints, key=lambda x: os.path.getctime(x), reverse=True)
         if prints:
             canvas = tk.Canvas(self._frame_prints_canvas, bg="#f7f7f7", highlightthickness=0)
             scrollbar = tk.Scrollbar(self._frame_prints_canvas, orient="vertical", command=canvas.yview)
@@ -695,13 +697,22 @@ class RecorderGUI:
             scrollbar.pack(side="right", fill="y")
             self._detalhes_imgs_refs = []
             max_per_row = 3
+            # Referência ao modal de print aberto
+            if not hasattr(self, '_modal_print_ref'):
+                self._modal_print_ref = None
             for idx, img_path in enumerate(prints):
                 img = Image.open(img_path)
                 img.thumbnail((180, 120))
                 tk_img = ImageTk.PhotoImage(img)
                 self._detalhes_imgs_refs.append(tk_img)
                 def abrir_full(img_path=img_path):
-                    self._abrir_modal_print(img_path)
+                    # Reutiliza o mesmo modal se já estiver aberto
+                    if self._modal_print_ref is None or not self._modal_print_ref.winfo_exists():
+                        self._modal_print_ref = None
+                        self._modal_print_ref = tk.Toplevel(self.master)
+                    self._abrir_modal_print(img_path, reuse_modal=self._modal_print_ref)
+                    self._modal_print_ref.deiconify()
+                    self._modal_print_ref.lift()
                 frame_thumb = tk.Frame(scroll_frame, bg="#f7f7f7", bd=1, relief="solid")
                 btn = tk.Button(frame_thumb, image=tk_img, command=abrir_full, bg="#f7f7f7", relief="flat")
                 btn.pack()
@@ -712,39 +723,70 @@ class RecorderGUI:
         else:
             tk.Label(self._frame_prints_canvas, text="Nenhum print capturado ainda.", font=("Arial", 12, "italic"), bg="#f7f7f7", fg="#888").pack(pady=30)
 
-    def _abrir_modal_print(self, img_path):
+    def _abrir_modal_print(self, img_path, auto_ia=False, reuse_modal=None):
         import tkinter as tk
         from PIL import Image, ImageTk
-        import os, json
-        modal = tk.Toplevel(self.master)
-        modal.title(f"Print: {os.path.basename(img_path)}")
-        modal.geometry("700x700")
-        modal.configure(bg="#f7f7f7")
-        # Imagem grande
+        import os
+        # Reutilizar modal se fornecido
+        if reuse_modal is not None:
+            modal = reuse_modal
+            for widget in modal.winfo_children():
+                widget.destroy()
+        else:
+            modal = tk.Toplevel(self.master)
+            modal.title(f"Print: {os.path.basename(img_path)}")
+            modal.geometry("700x750")
+            modal.configure(bg="#f7f7f7")
         img = Image.open(img_path)
         img.thumbnail((650, 400))
         tk_img = ImageTk.PhotoImage(img)
         lbl_img = tk.Label(modal, image=tk_img, bg="#f7f7f7")
         lbl_img.image = tk_img
-        lbl_img.pack(pady=10)
-        # Área de análise IA
+        lbl_img.pack(pady=(18, 10))
+        def abrir_imagem_original(event=None):
+            import platform, subprocess, os
+            path_abs = os.path.abspath(img_path)
+            try:
+                if platform.system() == "Linux":
+                    # xdg-open pode retornar imediatamente, não bloqueia
+                    subprocess.Popen(["xdg-open", path_abs], start_new_session=True)
+                elif platform.system() == "Darwin":
+                    subprocess.Popen(["open", path_abs], start_new_session=True)
+                elif platform.system() == "Windows":
+                    os.startfile(path_abs)
+                else:
+                    from tkinter import messagebox
+                    messagebox.showerror("Erro", "Não foi possível abrir a imagem: sistema operacional não suportado.")
+            except Exception as e:
+                from tkinter import messagebox
+                messagebox.showerror("Erro", f"Erro ao abrir a imagem: {e}")
+        lbl_img.bind('<Double-Button-1>', abrir_imagem_original)
         frame_ia = tk.Frame(modal, bg="#f7f7f7")
-        frame_ia.pack(fill='x', padx=20, pady=10)
-        json_path = img_path.replace('.png', '.json')
-        def exibir_analise(dados):
-            resumo = dados.get('resumo', '(Sem resumo)')
-            codigo = dados.get('codigo', None)
-            tk.Label(frame_ia, text="Resumo da IA:", font=("Arial", 11, "bold"), bg="#f7f7f7").pack(anchor='w')
-            txt_resumo = tk.Text(frame_ia, font=("Arial", 11), height=4, wrap='word')
-            txt_resumo.pack(fill='x', pady=(0, 8))
-            txt_resumo.insert('1.0', resumo)
-            txt_resumo.config(state='disabled')
-            if codigo:
-                tk.Label(frame_ia, text="Código/Desafio detectado:", font=("Arial", 11, "bold"), bg="#f7f7f7", fg="#1976D2").pack(anchor='w')
-                txt_codigo = tk.Text(frame_ia, font=("Consolas", 10), height=6, wrap='word', bg="#e3eafc")
-                txt_codigo.pack(fill='x', pady=(0, 8))
-                txt_codigo.insert('1.0', codigo)
-                txt_codigo.config(state='disabled')
+        frame_ia.pack(fill='x', padx=20, pady=(0, 20))
+        md_path = img_path.replace('.png', '.md')
+        def exibir_analise_markdown(markdown_text):
+            for widget in frame_ia.winfo_children():
+                widget.destroy()
+            card = tk.Frame(frame_ia, bg="#e3eafc", bd=0, highlightbackground="#b3c6e6", highlightthickness=1)
+            card.pack(fill='both', expand=True, padx=0, pady=0)
+            try:
+                import tkmarkdown
+                md_widget = tkmarkdown.Markdown(card, text=markdown_text, font=("Arial", 12), bg="#e3eafc", borderwidth=0, highlightthickness=0)
+                md_widget.pack(fill='both', expand=True, padx=18, pady=(18, 8))
+            except ImportError:
+                txt = tk.Text(card, font=("Consolas", 11), height=16, wrap='word', bg="#e3eafc", relief='flat', bd=0)
+                txt.pack(fill='both', expand=True, padx=18, pady=(18, 8))
+                txt.insert('1.0', markdown_text)
+                txt.config(state='disabled')
+            btn_frame = tk.Frame(card, bg="#e3eafc")
+            btn_frame.pack(fill='x', padx=18, pady=(0, 14))
+            def copiar_resultado():
+                modal.clipboard_clear()
+                modal.clipboard_append(markdown_text)
+            btn_copiar = tk.Button(btn_frame, text="Copiar resultado", command=copiar_resultado, font=("Arial", 10), bg="#b3c6e6", relief=tk.RAISED)
+            btn_copiar.pack(side='left', padx=(0, 8), ipadx=8, ipady=2)
+            btn_reanalisar = tk.Button(btn_frame, text="Reanalisar IA", command=analisar_ia, font=("Arial", 10), bg="#1976D2", fg="white", relief=tk.RAISED)
+            btn_reanalisar.pack(side='right', ipadx=8, ipady=2)
         def analisar_ia():
             frame_ia.pack_forget()
             frame_loading = tk.Frame(modal, bg="#f7f7f7")
@@ -758,30 +800,7 @@ class RecorderGUI:
                     genai.configure(api_key=api_key)
                     with open(img_path, 'rb') as f:
                         img_bytes = f.read()
-                    prompt = """Analise esta imagem e forneça uma análise detalhada em português do Brasil, incluindo:
-
-1. Um resumo conciso do conteúdo visual
-2. Se houver código de programação ou desafio de lógica:
-   - Extraia o código exatamente como aparece
-   - Explique o que está sendo proposto/resolvido
-   - Identifique a linguagem de programação
-3. Se houver texto ou mensagens de erro:
-   - Transcreva o texto exatamente como aparece
-   - Explique o significado ou contexto
-
-Retorne a resposta em formato JSON:
-{
-    "resumo": "resumo do conteúdo visual",
-    "codigo": {
-        "texto": "código detectado (se houver)",
-        "linguagem": "linguagem identificada",
-        "explicacao": "explicação do código"
-    },
-    "texto": {
-        "conteudo": "texto transcrito (se houver)",
-        "explicacao": "explicação do texto"
-    }
-}"""
+                    prompt = """Analise esta imagem e forneça uma análise detalhada em português do Brasil, incluindo:\n\n1. Um resumo conciso do conteúdo visual\n2. Se houver código de programação, desafio de código, questão de prova ou questionário:\n   - Extraia o código ou a questão exatamente como aparece\n   - Explique o que está sendo proposto/resolvido\n   - Identifique a linguagem de programação (se aplicável)\n   - Gere uma resposta objetiva para a questão/código/desafio, se possível, e inclua como um tópico final chamado 'Resposta Objetiva'\n3. Se houver texto ou mensagens de erro:\n   - Transcreva o texto exatamente como aparece\n   - Explique o significado ou contexto\n\nRetorne a resposta EXCLUSIVAMENTE em markdown bem formatado, com títulos, listas, blocos de código e destaques conforme apropriado. Não inclua explicações fora do markdown.\n\nExemplo de estrutura sugerida:\n\n# Resumo\n...\n\n# Código ou Questão Detectada\n```python\n...\n```\n\n## Explicação\n...\n\n## Resposta Objetiva\n...\n\n# Texto Detectado\n...\n\n# Mensagens de Erro\n...\n\nSe algum item não existir, omita a seção correspondente."""
                     model = genai.GenerativeModel(GEMINI_MODEL)
                     response = model.generate_content(
                         [
@@ -795,68 +814,59 @@ Retorne a resposta em formato JSON:
                             "max_output_tokens": 2048,
                         },
                     )
-                    try:
-                        resposta = response.text.strip()
-                        # Limpa possíveis blocos de markdown
-                        resposta_limpa = re.sub(r"^```[a-zA-Z]*\n?|```$", "", resposta, flags=re.MULTILINE).strip()
-                        dados = json.loads(resposta_limpa)
-                        # Salva o resultado
-                        with open(json_path, 'w', encoding='utf-8') as f:
-                            json.dump(dados, f, ensure_ascii=False, indent=2)
-                        self.master.after(0, lambda: frame_loading.pack_forget())
-                        self.master.after(0, lambda: frame_ia.pack(fill='x', padx=20, pady=10))
-                        self.master.after(0, lambda: exibir_analise(dados))
-                    except json.JSONDecodeError as e:
-                        def mostrar_erro():
-                            frame_loading.pack_forget()
-                            frame_ia.pack(fill='x', padx=20, pady=10)
-                            for widget in frame_ia.winfo_children():
-                                widget.destroy()
-                            tk.Label(frame_ia, text="Erro ao processar resposta da IA:", font=("Arial", 11, "bold"), fg="#F44336", bg="#f7f7f7").pack(anchor='w', pady=(0, 4))
-                            txt_erro = tk.Text(frame_ia, font=("Consolas", 10), height=8, wrap='word', bg="#fff0f0", fg="#b71c1c")
-                            txt_erro.pack(fill='x', pady=(0, 8))
-                            txt_erro.insert('1.0', resposta_limpa)
-                            txt_erro.config(state='disabled')
-                            def copiar_erro():
-                                modal.clipboard_clear()
-                                modal.clipboard_append(resposta_limpa)
-                            btn_copiar = tk.Button(frame_ia, text="Copiar erro", command=copiar_erro, font=("Arial", 10))
-                            btn_copiar.pack(anchor='e', pady=(0, 8))
-                        self.master.after(0, mostrar_erro)
+                    resposta = response.text.strip()
+                    resposta_limpa = re.sub(r"^```[a-zA-Z]*\n?|```$", "", resposta, flags=re.MULTILINE).strip()
+                    with open(md_path, 'w', encoding='utf-8') as f:
+                        f.write(resposta_limpa)
+                    self.master.after(0, lambda: frame_loading.pack_forget())
+                    self.master.after(0, lambda: frame_ia.pack(fill='x', padx=20, pady=10))
+                    self.master.after(0, lambda: exibir_analise_markdown(resposta_limpa))
                 except Exception as e:
                     msg_erro = str(e)
                     if len(msg_erro) > 400:
                         msg_erro = msg_erro[:400] + '\n... (mensagem truncada)'
-                    tipo_erro = type(e).__name__
                     def mostrar_erro():
                         frame_loading.pack_forget()
                         frame_ia.pack(fill='x', padx=20, pady=10)
                         for widget in frame_ia.winfo_children():
                             widget.destroy()
-                        tk.Label(frame_ia, text=f"Erro ao analisar imagem ({tipo_erro}):", font=("Arial", 11, "bold"), fg="#F44336", bg="#f7f7f7").pack(anchor='w', pady=(0, 4))
-                        txt_erro = tk.Text(frame_ia, font=("Consolas", 10), height=8, wrap='word', bg="#fff0f0", fg="#b71c1c")
-                        txt_erro.pack(fill='x', pady=(0, 8))
+                        card = tk.Frame(frame_ia, bg="#fff0f0", bd=0, highlightbackground="#f44336", highlightthickness=1)
+                        card.pack(fill='both', expand=True, padx=0, pady=0)
+                        txt_erro = tk.Text(card, font=("Consolas", 10), height=10, wrap='word', bg="#fff0f0", fg="#b71c1c", relief='flat', bd=0)
+                        txt_erro.pack(fill='both', expand=True, padx=18, pady=(18, 8))
                         txt_erro.insert('1.0', msg_erro)
                         txt_erro.config(state='disabled')
                         def copiar_erro():
                             modal.clipboard_clear()
                             modal.clipboard_append(str(e))
-                        btn_copiar = tk.Button(frame_ia, text="Copiar erro", command=copiar_erro, font=("Arial", 10))
-                        btn_copiar.pack(anchor='e', pady=(0, 8))
+                        btn_frame = tk.Frame(card, bg="#fff0f0")
+                        btn_frame.pack(fill='x', padx=18, pady=(0, 14))
+                        btn_copiar = tk.Button(btn_frame, text="Copiar erro", command=copiar_erro, font=("Arial", 10), bg="#ffcdd2", relief=tk.RAISED)
+                        btn_copiar.pack(side='left', padx=(0, 8), ipadx=8, ipady=2)
+                        btn_reanalisar = tk.Button(btn_frame, text="Reanalisar IA", command=analisar_ia, font=("Arial", 10), bg="#1976D2", fg="white", relief=tk.RAISED)
+                        btn_reanalisar.pack(side='right', ipadx=8, ipady=2)
                     self.master.after(0, mostrar_erro)
             import threading
             t = threading.Thread(target=run_ia, daemon=True)
             t.start()
-        # Verifica se já existe análise
-        if os.path.exists(json_path):
-            with open(json_path, 'r', encoding='utf-8') as f:
-                dados = json.load(f)
-            exibir_analise(dados)
-            btn_reanalisar = tk.Button(frame_ia, text="Reanalisar com IA", command=analisar_ia, font=("Arial", 10))
-            btn_reanalisar.pack(pady=(8, 0), anchor='e')
+        # Exibe análise existente ou botão para analisar
+        if os.path.exists(md_path):
+            with open(md_path, 'r', encoding='utf-8') as f:
+                markdown_text = f.read()
+            exibir_analise_markdown(markdown_text)
         else:
-            btn_analisar = tk.Button(frame_ia, text="Analisar com IA", command=analisar_ia, font=("Arial", 10))
-            btn_analisar.pack(pady=(8, 0), anchor='e')
+            for widget in frame_ia.winfo_children():
+                widget.destroy()
+            card = tk.Frame(frame_ia, bg="#e3eafc", bd=0, highlightbackground="#b3c6e6", highlightthickness=1)
+            card.pack(fill='both', expand=True, padx=0, pady=0)
+            lbl = tk.Label(card, text="Nenhuma análise encontrada para este print.", font=("Arial", 12, "italic"), bg="#e3eafc", fg="#888")
+            lbl.pack(padx=18, pady=(18, 8), anchor='w')
+            btn_frame = tk.Frame(card, bg="#e3eafc")
+            btn_frame.pack(fill='x', padx=18, pady=(0, 14))
+            btn_analisar = tk.Button(btn_frame, text="Analisar com IA", command=analisar_ia, font=("Arial", 10), bg="#1976D2", fg="white", relief=tk.RAISED)
+            btn_analisar.pack(side='right', ipadx=8, ipady=2)
+        if auto_ia:
+            modal.after(200, analisar_ia)
 
     def transcrever_selecionado(self):
         print('[DEBUG] transcrever_selecionado chamado')
@@ -990,9 +1000,49 @@ Retorne a resposta em formato JSON:
                 except Exception as e:
                     print(f"[PERMISSAO] Não foi possível ajustar permissões do arquivo: {e}")
                 self.status.config(text="Print de tela capturado com sucesso!", fg="#388E3C")
-                # Atualizar grade de prints se janela de detalhes estiver aberta
-                if hasattr(self, '_frame_prints_canvas') and hasattr(self, '_atualizar_aba_prints_grade'):
-                    self._atualizar_aba_prints_grade()
+                # Iniciar análise IA em background, sem depender de interface de modal
+                def analisar_ia_em_bg():
+                    import threading
+                    def run_ia():
+                        try:
+                            self.status.config(text="Análise IA em andamento...", fg="#1976D2")
+                            api_key = os.environ.get("GEMINI_API_KEY") or GEMINI_API_KEY
+                            model = GEMINI_MODEL
+                            genai.configure(api_key=api_key)
+                            with open(path, 'rb') as f:
+                                img_bytes = f.read()
+                            prompt = """Analise esta imagem e forneça uma análise detalhada em português do Brasil, incluindo:\n\n1. Um resumo conciso do conteúdo visual\n2. Se houver código de programação, desafio de código, questão de prova ou questionário:\n   - Extraia o código ou a questão exatamente como aparece\n   - Explique o que está sendo proposto/resolvido\n   - Identifique a linguagem de programação (se aplicável)\n   - Gere uma resposta objetiva para a questão/código/desafio, se possível, e inclua como um tópico final chamado 'Resposta Objetiva'\n3. Se houver texto ou mensagens de erro:\n   - Transcreva o texto exatamente como aparece\n   - Explique o significado ou contexto\n\nRetorne a resposta EXCLUSIVAMENTE em markdown bem formatado, com títulos, listas, blocos de código e destaques conforme apropriado. Não inclua explicações fora do markdown.\n\nExemplo de estrutura sugerida:\n\n# Resumo\n...\n\n# Código ou Questão Detectada\n```python\n...\n```\n\n## Explicação\n...\n\n## Resposta Objetiva\n...\n\n# Texto Detectado\n...\n\n# Mensagens de Erro\n...\n\nSe algum item não existir, omita a seção correspondente."""
+                            model = genai.GenerativeModel(GEMINI_MODEL)
+                            response = model.generate_content(
+                                [
+                                    {"text": prompt},
+                                    {"inline_data": {"mime_type": "image/png", "data": img_bytes}},
+                                ],
+                                generation_config={
+                                    "temperature": 0.1,
+                                    "top_p": 0.8,
+                                    "top_k": 40,
+                                    "max_output_tokens": 2048,
+                                },
+                            )
+                            resposta = response.text.strip()
+                            resposta_limpa = re.sub(r"^```[a-zA-Z]*\n?|```$", "", resposta, flags=re.MULTILINE).strip()
+                            md_path = path.replace('.png', '.md')
+                            with open(md_path, 'w', encoding='utf-8') as f:
+                                f.write(resposta_limpa)
+                            try:
+                                ajustar_permissao_usuario(md_path)
+                            except Exception:
+                                pass
+                            self.status.config(text="Análise IA concluída!", fg="#388E3C")
+                        except Exception as e:
+                            print(f'[IA][BG] Erro ao analisar print automaticamente: {e}')
+                            msg = str(e)
+                            if len(msg) > 120:
+                                msg = msg[:120] + '...'
+                            self.status.config(text=f"Erro na análise IA: {msg}", fg="#F44336")
+                    threading.Thread(target=run_ia, daemon=True).start()
+                self.master.after(300, analisar_ia_em_bg)
             else:
                 print('[PRINT] Nenhuma gravação selecionada na grid para salvar o print.')
                 self.status.config(text="Nenhuma gravação selecionada para salvar o print.", fg="#F44336")
