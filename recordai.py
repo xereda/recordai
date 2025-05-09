@@ -785,6 +785,10 @@ class RecorderGUI:
             resposta_markdown.set(md)
             for widget in card_resposta.winfo_children():
                 widget.destroy()
+            if md.strip().lower().startswith('pesquisando'):
+                lbl_loading = tk.Label(card_resposta, text=md, font=("Arial", 14, "bold"), bg=BG_CARD, fg="#1976D2")
+                lbl_loading.pack(expand=True, pady=40)
+                return
             html = md2html(md, extensions=['fenced_code', 'codehilite'])
             html = html.replace('<pre>', '<pre style="background:#f4f4f4;border:1px solid #b3c6e6;padding:8px;border-radius:6px;overflow-x:auto;font-family:monospace;font-size:13px;">')
             html = html.replace('<code>', '<code style="font-family:monospace;font-size:13px;">')
@@ -809,7 +813,8 @@ class RecorderGUI:
                 set_resposta_markdown("Digite uma pergunta.")
                 return
             btn_perguntar.config(state=tk.DISABLED)
-            set_resposta_markdown("Consultando IA...")
+            set_resposta_markdown("Pesquisando... Aguarde a resposta da IA.")
+            self.master.update_idletasks()
             texto_base = transcricao_c
             def run_ia_pergunta():
                 try:
@@ -817,7 +822,15 @@ class RecorderGUI:
                     api_key = os.environ.get("GEMINI_API_KEY") or GEMINI_API_KEY
                     model = GEMINI_MODEL
                     genai.configure(api_key=api_key)
-                    prompt = f"""Você receberá a transcrição de uma gravação de áudio. Use esse texto como contexto para responder a pergunta do usuário, sempre em português do Brasil. Seja objetivo e claro.\n\nTranscrição:\n{texto_base}\n\nPergunta do usuário:\n{pergunta}\n\nResponda de forma clara, objetiva e, se possível, cite trechos da transcrição que embasam sua resposta. Use markdown bem formatado."""
+                    prompt = f"""
+Responda apenas com base no conteúdo do print abaixo. Se a resposta não estiver presente, informe claramente que não é possível responder com base apenas no print.
+
+Conteúdo do print:
+{texto_base}
+
+Pergunta do usuário:
+{pergunta}
+"""
                     model = genai.GenerativeModel(GEMINI_MODEL)
                     response = model.generate_content(prompt)
                     resposta = response.text.strip()
@@ -1124,17 +1137,17 @@ class RecorderGUI:
             for widget in card_resposta.winfo_children():
                 widget.destroy()
             if md.strip().lower().startswith('pesquisando'):
-                lbl_loading = tk.Label(card_resposta, text=md, font=("Arial", 14, "bold"), bg='#e3eafc', fg="#1976D2")
+                lbl_loading = tk.Label(card_resposta, text=md, font=("Arial", 14, "bold"), bg=BG_CARD, fg="#1976D2")
                 lbl_loading.pack(expand=True, pady=40)
                 return
             html = md2html(md, extensions=['fenced_code', 'codehilite'])
-            html = html.replace('<pre>', '<pre style=\"background:#f4f4f4;border:1px solid #b3c6e6;padding:8px;border-radius:6px;overflow-x:auto;font-family:monospace;font-size:13px;\">')
-            html = html.replace('<code>', '<code style=\"font-family:monospace;font-size:13px;\">')
+            html = html.replace('<pre>', '<pre style="background:#f4f4f4;border:1px solid #b3c6e6;padding:8px;border-radius:6px;overflow-x:auto;font-family:monospace;font-size:13px;">')
+            html = html.replace('<code>', '<code style="font-family:monospace;font-size:13px;">')
             html_frame = HtmlFrame(card_resposta, messages_enabled=False, vertical_scrollbar=True)
             html_frame.load_html(html)
             html_frame.pack(fill='both', expand=True, padx=18, pady=(12, 0))
             # Botão copiar resposta
-            btn_frame_resposta = tk.Frame(card_resposta, bg='#e3eafc')
+            btn_frame_resposta = tk.Frame(card_resposta, bg=BG_CARD)
             btn_frame_resposta.pack(fill='x', padx=18, pady=(8, 10), anchor='s')
             def copiar_resposta():
                 modal.clipboard_clear()
@@ -1151,28 +1164,43 @@ class RecorderGUI:
                 return
             btn_perguntar.config(state=tk.DISABLED)
             set_resposta_markdown("Pesquisando... Aguarde a resposta da IA.")
+            modal.update_idletasks()
             try:
                 with open(img_path, 'rb') as f:
                     img_bytes = f.read()
-                prompt = f"""Você receberá uma imagem (print de tela). Use o conteúdo visual dela como contexto para responder a pergunta do usuário, sempre em português do Brasil. Seja objetivo e claro.\n\nPergunta do usuário:\n{pergunta}\n\nResponda de forma clara, objetiva e, se possível, cite elementos visuais/textuais do print que embasam sua resposta. Use markdown bem formatado."""
+                prompt = f"""
+Use o conteúdo visual e textual do print abaixo como contexto principal para responder à pergunta do usuário. Se a resposta não estiver presente no print, utilize também seu conhecimento externo e realize uma pesquisa para fornecer uma resposta completa, clara e útil ao usuário. Sempre responda em português do Brasil e use markdown bem formatado.
+
+Print de tela (imagem em anexo):
+
+Pergunta do usuário:
+{pergunta}
+"""
                 import google.generativeai as genai
                 api_key = os.environ.get("GEMINI_API_KEY") or GEMINI_API_KEY
                 genai.configure(api_key=api_key)
                 model = genai.GenerativeModel(GEMINI_MODEL)
-                response = model.generate_content([
-                    {"text": prompt},
-                    {"inline_data": {"mime_type": "image/png", "data": img_bytes}},
-                ], generation_config={
-                    "temperature": 0.1,
-                    "top_p": 0.8,
-                    "top_k": 40,
-                    "max_output_tokens": 2048,
-                })
-                resposta = response.text.strip()
-                set_resposta_markdown(resposta)
+                def run_ia():
+                    try:
+                        response = model.generate_content([
+                            {"text": prompt},
+                            {"inline_data": {"mime_type": "image/png", "data": img_bytes}},
+                        ], generation_config={
+                            "temperature": 0.1,
+                            "top_p": 0.8,
+                            "top_k": 40,
+                            "max_output_tokens": 2048,
+                        })
+                        resposta = response.text.strip()
+                        modal.after(0, lambda: set_resposta_markdown(resposta))
+                    except Exception as e:
+                        modal.after(0, lambda: set_resposta_markdown(f"Erro ao consultar IA: {e}"))
+                    finally:
+                        modal.after(0, lambda: btn_perguntar.config(state=tk.NORMAL))
+                import threading
+                threading.Thread(target=run_ia, daemon=True).start()
             except Exception as e:
-                set_resposta_markdown(f"Erro ao consultar IA: {e}")
-            finally:
+                set_resposta_markdown(f"Erro ao preparar consulta IA: {e}")
                 btn_perguntar.config(state=tk.NORMAL)
         btn_perguntar.config(command=perguntar_ia_print)
         # --- NOVO: Exibir análise automática da IA do print (lado esquerdo) ---
