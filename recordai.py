@@ -1103,20 +1103,104 @@ Pergunta do usuário:
 
         meta_frame = tk.Frame(right_content, bg='#e3eafc', bd=0, highlightbackground="#b3c6e6", highlightthickness=1)
         meta_frame.pack(fill='x', padx=32, pady=(32, 12), anchor='n')
-        tk.Label(meta_frame, text="Metadados do Print", font=("Arial", 13, "bold"), bg='#e3eafc').pack(anchor='w', padx=16, pady=(12, 2))
-        tk.Label(meta_frame, text=meta_str, font=("Arial", 11), bg='#e3eafc', fg="#333").pack(anchor='w', padx=16, pady=(0, 8))
-        tk.Label(meta_frame, text="Caminho do arquivo:", font=("Arial", 11, "bold"), bg='#e3eafc').pack(anchor='w', padx=16, pady=(8, 0))
-        entry_caminho = tk.Entry(meta_frame, font=("Arial", 10), width=80)
+        # Header: título e botões alinhados à direita
+        header_frame = tk.Frame(meta_frame, bg='#e3eafc')
+        header_frame.pack(fill='x', pady=(8, 0))
+        tk.Label(header_frame, text="Ações do Print", font=("Arial", 13, "bold"), bg='#e3eafc').pack(side='left', padx=16)
+        # Botões de ação (alinhados à direita)
+        btns_frame = tk.Frame(header_frame, bg='#e3eafc')
+        btns_frame.pack(side='right', padx=8)
+        # Navegação entre prints
+        prints_dir = os.path.dirname(img_path)
+        prints_list = sorted([f for f in os.listdir(prints_dir) if f.startswith('print_') and f.endswith('.png')], key=lambda x: os.path.getctime(os.path.join(prints_dir, x)))
+        current_idx = prints_list.index(os.path.basename(img_path)) if os.path.basename(img_path) in prints_list else 0
+        def atualizar_modal_print(novo_idx):
+            novo_path = os.path.join(prints_dir, prints_list[novo_idx])
+            self._abrir_modal_print(novo_path, reuse_modal=modal)
+        def deletar_print():
+            import tkinter.messagebox as mb
+            if not mb.askyesno("Deletar Print", "Deseja realmente deletar este print? (A imagem e a análise serão removidas)"):
+                return
+            try:
+                os.remove(img_path)
+                md_path = img_path.replace('.png', '.md')
+                if os.path.exists(md_path):
+                    os.remove(md_path)
+            except Exception as e:
+                mb.showerror("Erro ao deletar", f"Erro ao deletar print: {e}")
+                return
+            novos_prints = sorted([f for f in os.listdir(prints_dir) if f.startswith('print_') and f.endswith('.png')], key=lambda x: os.path.getctime(os.path.join(prints_dir, x)))
+            if not novos_prints:
+                modal.destroy()
+            else:
+                novo_idx = max(0, min(current_idx, len(novos_prints)-1))
+                self._abrir_modal_print(os.path.join(prints_dir, novos_prints[novo_idx]), reuse_modal=modal)
+        def abrir_no_sistema():
+            path = os.path.abspath(img_path)
+            if sys.platform.startswith('linux'):
+                subprocess.Popen(['xdg-open', path])
+            elif sys.platform == 'darwin':
+                subprocess.Popen(['open', path])
+            elif sys.platform == 'win32':
+                os.startfile(path)
+            else:
+                webbrowser.open(path)
+        if current_idx > 0:
+            btn_ant = tk.Button(btns_frame, text='⟨ Anterior', font=("Arial", 10), width=10, command=lambda: atualizar_modal_print(current_idx-1))
+            btn_ant.pack(side='left', padx=2)
+        btn_abrir = tk.Button(btns_frame, text='Abrir no sistema', font=("Arial", 10), width=16, command=abrir_no_sistema, bg="#b3c6e6")
+        btn_abrir.pack(side='left', padx=2)
+        btn_deletar = tk.Button(btns_frame, text='Deletar', font=("Arial", 10), width=10, command=deletar_print, bg="#F44336", fg="white")
+        btn_deletar.pack(side='left', padx=2)
+        if current_idx < len(prints_list)-1:
+            btn_prox = tk.Button(btns_frame, text='Próximo ⟩', font=("Arial", 10), width=10, command=lambda: atualizar_modal_print(current_idx+1))
+            btn_prox.pack(side='left', padx=2)
+        # Metadados e caminho
+        meta_info_frame = tk.Frame(meta_frame, bg='#e3eafc')
+        meta_info_frame.pack(fill='x', pady=(4, 0))
+        tk.Label(meta_info_frame, text=meta_str, font=("Arial", 11), bg='#e3eafc', fg="#333").pack(anchor='w', padx=16, pady=(0, 8))
+        tk.Label(meta_info_frame, text="Caminho do arquivo:", font=("Arial", 11, "bold"), bg='#e3eafc').pack(anchor='w', padx=16, pady=(8, 0))
+        entry_caminho = tk.Entry(meta_info_frame, font=("Arial", 10), width=80)
         entry_caminho.insert(0, img_path)
         entry_caminho.config(state='readonly')
         entry_caminho.pack(anchor='w', padx=16, pady=(0, 8))
         def copiar_caminho():
             modal.clipboard_clear()
             modal.clipboard_append(img_path)
-        btn_copiar = tk.Button(meta_frame, text="Copiar caminho", command=copiar_caminho, font=("Arial", 10), bg="#b3c6e6")
+        btn_copiar = tk.Button(meta_info_frame, text="Copiar caminho", command=copiar_caminho, font=("Arial", 10), bg="#b3c6e6")
         btn_copiar.pack(anchor='w', padx=16, pady=(0, 8))
 
-        # --- PERGUNTA IA SOBRE O PRINT ---
+        # --- NOVO: Exibir análise automática da IA do print (lado esquerdo) ---
+        md_path = img_path.replace('.png', '.md')
+        card_analise = tk.Frame(left_content, bg=BG_CARD, bd=0, highlightbackground="#b3c6e6", highlightthickness=1)
+        card_analise.pack(fill='both', expand=True, padx=32, pady=32)
+        tk.Label(card_analise, text="Análise automática da IA", font=("Arial", 13, "bold"), bg=BG_CARD).pack(anchor='w', padx=16, pady=(12, 2))
+        def render_markdown_in_frame(md, frame):
+            for widget in frame.winfo_children():
+                if isinstance(widget, tk.Label) and widget.cget('text') == "Análise automática da IA":
+                    continue
+                widget.destroy()
+            if not md.strip():
+                tk.Label(frame, text="Nenhuma análise automática disponível para este print.", font=("Arial", 12, "italic"), bg=BG_CARD, fg="#888").pack(pady=30)
+                return
+            html = md2html(md, extensions=['fenced_code', 'codehilite'])
+            html = html.replace('<pre>', '<pre style="background:#f4f4f4;border:1px solid #b3c6e6;padding:8px;border-radius:6px;overflow-x:auto;font-family:monospace;font-size:13px;">')
+            html = html.replace('<code>', '<code style="font-family:monospace;font-size:13px;">')
+            html_frame = HtmlFrame(frame, messages_enabled=False, vertical_scrollbar=True)
+            html_frame.load_html(html)
+            html_frame.pack(fill='both', expand=True, padx=18, pady=(12, 0))
+        try:
+            if os.path.exists(md_path):
+                with open(md_path, 'r', encoding='utf-8') as f:
+                    md_content = f.read()
+            else:
+                md_content = ""
+        except Exception as e:
+            md_content = f"Erro ao carregar análise automática: {e}"
+        render_markdown_in_frame(md_content, card_analise)
+        # --- FIM NOVO ---
+
+        # --- PERGUNTA IA SOBRE O PRINT (restaurado) ---
         pergunta_frame = tk.Frame(right_content, bg='#f7f7f7')
         pergunta_frame.pack(fill='x', padx=32, pady=(0, 8), anchor='n')
         tk.Label(pergunta_frame, text="Pergunte algo sobre este print:", font=("Arial", 13, "bold"), bg='#f7f7f7').pack(anchor='w', padx=2, pady=(0, 2))
@@ -1141,8 +1225,8 @@ Pergunta do usuário:
                 lbl_loading.pack(expand=True, pady=40)
                 return
             html = md2html(md, extensions=['fenced_code', 'codehilite'])
-            html = html.replace('<pre>', '<pre style="background:#f4f4f4;border:1px solid #b3c6e6;padding:8px;border-radius:6px;overflow-x:auto;font-family:monospace;font-size:13px;">')
-            html = html.replace('<code>', '<code style="font-family:monospace;font-size:13px;">')
+            html = html.replace('<pre>', '<pre style=\"background:#f4f4f4;border:1px solid #b3c6e6;padding:8px;border-radius:6px;overflow-x:auto;font-family:monospace;font-size:13px;\">')
+            html = html.replace('<code>', '<code style=\"font-family:monospace;font-size:13px;\">')
             html_frame = HtmlFrame(card_resposta, messages_enabled=False, vertical_scrollbar=True)
             html_frame.load_html(html)
             html_frame.pack(fill='both', expand=True, padx=18, pady=(12, 0))
@@ -1203,87 +1287,6 @@ Pergunta do usuário:
                 set_resposta_markdown(f"Erro ao preparar consulta IA: {e}")
                 btn_perguntar.config(state=tk.NORMAL)
         btn_perguntar.config(command=perguntar_ia_print)
-        # --- NOVO: Exibir análise automática da IA do print (lado esquerdo) ---
-        md_path = img_path.replace('.png', '.md')
-        card_analise = tk.Frame(left_content, bg=BG_CARD, bd=0, highlightbackground="#b3c6e6", highlightthickness=1)
-        card_analise.pack(fill='both', expand=True, padx=32, pady=32)
-        tk.Label(card_analise, text="Análise automática da IA", font=("Arial", 13, "bold"), bg=BG_CARD).pack(anchor='w', padx=16, pady=(12, 2))
-        def render_markdown_in_frame(md, frame):
-            for widget in frame.winfo_children():
-                if isinstance(widget, tk.Label) and widget.cget('text') == "Análise automática da IA":
-                    continue
-                widget.destroy()
-            if not md.strip():
-                tk.Label(frame, text="Nenhuma análise automática disponível para este print.", font=("Arial", 12, "italic"), bg=BG_CARD, fg="#888").pack(pady=30)
-                return
-            html = md2html(md, extensions=['fenced_code', 'codehilite'])
-            html = html.replace('<pre>', '<pre style="background:#f4f4f4;border:1px solid #b3c6e6;padding:8px;border-radius:6px;overflow-x:auto;font-family:monospace;font-size:13px;">')
-            html = html.replace('<code>', '<code style="font-family:monospace;font-size:13px;">')
-            html_frame = HtmlFrame(frame, messages_enabled=False, vertical_scrollbar=True)
-            html_frame.load_html(html)
-            html_frame.pack(fill='both', expand=True, padx=18, pady=(12, 0))
-        try:
-            if os.path.exists(md_path):
-                with open(md_path, 'r', encoding='utf-8') as f:
-                    md_content = f.read()
-            else:
-                md_content = ""
-        except Exception as e:
-            md_content = f"Erro ao carregar análise automática: {e}"
-        render_markdown_in_frame(md_content, card_analise)
-        # --- FIM NOVO ---
-
-        # --- NOVO: Botões de navegação, deletar e abrir no sistema ---
-        # Descobre todos os prints do diretório
-        prints_dir = os.path.dirname(img_path)
-        prints_list = sorted([f for f in os.listdir(prints_dir) if f.startswith('print_') and f.endswith('.png')], key=lambda x: os.path.getctime(os.path.join(prints_dir, x)))
-        current_idx = prints_list.index(os.path.basename(img_path)) if os.path.basename(img_path) in prints_list else 0
-
-        def atualizar_modal_print(novo_idx):
-            novo_path = os.path.join(prints_dir, prints_list[novo_idx])
-            self._abrir_modal_print(novo_path, reuse_modal=modal)
-
-        def deletar_print():
-            import tkinter.messagebox as mb
-            if not mb.askyesno("Deletar Print", "Deseja realmente deletar este print? (A imagem e a análise serão removidas)"):
-                return
-            try:
-                os.remove(img_path)
-                md_path = img_path.replace('.png', '.md')
-                if os.path.exists(md_path):
-                    os.remove(md_path)
-            except Exception as e:
-                mb.showerror("Erro ao deletar", f"Erro ao deletar print: {e}")
-                return
-            # Atualiza lista e fecha ou navega
-            novos_prints = sorted([f for f in os.listdir(prints_dir) if f.startswith('print_') and f.endswith('.png')], key=lambda x: os.path.getctime(os.path.join(prints_dir, x)))
-            if not novos_prints:
-                modal.destroy()
-            else:
-                novo_idx = max(0, min(current_idx, len(novos_prints)-1))
-                self._abrir_modal_print(os.path.join(prints_dir, novos_prints[novo_idx]), reuse_modal=modal)
-
-        def abrir_no_sistema():
-            path = os.path.abspath(img_path)
-            if sys.platform.startswith('linux'):
-                subprocess.Popen(['xdg-open', path])
-            elif sys.platform == 'darwin':
-                subprocess.Popen(['open', path])
-            elif sys.platform == 'win32':
-                os.startfile(path)
-            else:
-                webbrowser.open(path)
-
-        nav_frame = tk.Frame(modal, bg=BG_MODAL)
-        nav_frame.pack(side='bottom', fill='x', pady=(0, 16), anchor='s')
-        btn_ant = tk.Button(nav_frame, text='⟨ Anterior', font=("Arial", 11, "bold"), width=12, command=lambda: atualizar_modal_print(current_idx-1), state=tk.NORMAL if current_idx > 0 else tk.DISABLED)
-        btn_ant.pack(side='left', padx=24)
-        btn_abrir = tk.Button(nav_frame, text='Abrir no sistema', font=("Arial", 11), width=18, command=abrir_no_sistema, bg="#b3c6e6")
-        btn_abrir.pack(side='left', padx=24)
-        btn_deletar = tk.Button(nav_frame, text='Deletar', font=("Arial", 11), width=12, command=deletar_print, bg="#F44336", fg="white")
-        btn_deletar.pack(side='right', padx=24)
-        btn_prox = tk.Button(nav_frame, text='Próximo ⟩', font=("Arial", 11, "bold"), width=12, command=lambda: atualizar_modal_print(current_idx+1), state=tk.NORMAL if current_idx < len(prints_list)-1 else tk.DISABLED)
-        btn_prox.pack(side='right', padx=24)
 
 def ajustar_permissao_usuario(path):
     try:
