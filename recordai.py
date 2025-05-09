@@ -285,12 +285,22 @@ class RecorderGUI:
     def stop_recording(self):
         if not self.is_recording:
             return
+        # Capture o tempo ANTES de parar a gravação
+        tempo_total = self.tempo_decorrido_var.get()
         self.is_recording = False
         self._stop_recording_flag.set()
         self.start_button.config(state=tk.NORMAL)
         self.stop_button.config(state=tk.DISABLED)
         self.status.config(text="Gravação finalizada!", fg="#388E3C")
         self._update_tempo_decorrido()
+        # Salva o tempo total de gravação
+        meta_path = os.path.join(self.gravacao_dir, 'gravacao_meta.json')
+        try:
+            with open(meta_path, 'w', encoding='utf-8') as f:
+                json.dump({"duracao": tempo_total}, f, ensure_ascii=False, indent=2)
+            ajustar_permissao_usuario(meta_path)
+        except Exception as e:
+            print(f"[META] Falha ao salvar tempo total: {e}")
         # Esconde o tempo decorrido
         if self.tempo_decorrido_label.winfo_ismapped():
             self.tempo_decorrido_label.pack_forget()
@@ -312,30 +322,31 @@ class RecorderGUI:
             if not blocos:
                 continue
             playlist_path = os.path.join(full_dir, 'playlist.m3u')
-            with open(playlist_path, 'w', encoding='utf-8') as m3u:
-                m3u.write('#EXTM3U\n')
-                for bloco in blocos:
-                    m3u.write(f'{os.path.abspath(os.path.join(full_dir, bloco))}\n')
-            try:
-                ajustar_permissao_usuario(playlist_path)
-            except Exception as e:
-                print(f"[PERMISSAO] Falha ao ajustar permissão do playlist: {e}")
-            duracao_total = 0
+            if not os.path.exists(playlist_path):
+                with open(playlist_path, 'w', encoding='utf-8') as m3u:
+                    m3u.write('#EXTM3U\n')
+                    for bloco in blocos:
+                        m3u.write(f'{os.path.abspath(os.path.join(full_dir, bloco))}\n')
+                try:
+                    ajustar_permissao_usuario(playlist_path)
+                except Exception as e:
+                    print(f"[PERMISSAO] Falha ao ajustar permissão do playlist: {e}")
             try:
                 path_primeiro_bloco = os.path.join(full_dir, blocos[0])
                 dt = datetime.fromtimestamp(os.path.getmtime(path_primeiro_bloco)).strftime('%d/%m/%Y %H:%M:%S')
             except Exception:
                 dt = ''
-            for f in blocos:
-                path = os.path.join(full_dir, f)
+            # Lê a duração do meta.json, se existir
+            meta_path = os.path.join(full_dir, 'gravacao_meta.json')
+            if os.path.exists(meta_path):
                 try:
-                    audio = AudioSegment.from_file(path)
-                    duracao_total += int(audio.duration_seconds)
+                    with open(meta_path, 'r', encoding='utf-8') as f:
+                        meta = json.load(f)
+                        duracao_str = meta.get('duracao', '?')
                 except Exception:
-                    pass
-            minutos = duracao_total // 60
-            segundos = duracao_total % 60
-            duracao_str = f"{minutos:02d}:{segundos:02d}"
+                    duracao_str = '?'
+            else:
+                duracao_str = '?'
             caminho_db = os.path.join(full_dir, f"gravacao_ia.json")
             titulo = ""
             if os.path.exists(caminho_db):
@@ -648,53 +659,84 @@ class RecorderGUI:
         # Frame principal horizontal
         main_frame = tk.Frame(detalhes, bg=BG_MODAL)
         main_frame.pack(fill='both', expand=True)
-        left_frame = tk.Frame(main_frame, bg=BG_MODAL, width=detalhes.winfo_screenwidth()//2)
+        left_frame = tk.Frame(main_frame, bg=BG_MODAL)
         left_frame.pack(side='left', fill='both', expand=True)
         right_frame = tk.Frame(main_frame, bg=BG_MODAL, width=detalhes.winfo_screenwidth()//2)
         right_frame.pack(side='right', fill='both', expand=True)
-        # --- PARTE ESQUERDA: conteúdo atual ---
-        titulo_modal = tk.Label(detalhes, text="Detalhes da Gravação", font=("Arial", 18, "bold"), bg=BG_MODAL, fg=FG_TITLE, anchor='w')
-        titulo_modal.place(x=PAD, y=PAD)
-        # Remover botão fechar customizado
-        # btn_fechar = tk.Button(detalhes, text="✕", ...)
-        # ...restante do código segue igual...
-        # Dados principais
+        # --- PARTE ESQUERDA: dividir em superior (info) e inferior (thumbs) ---
+        left_frame.grid_rowconfigure(0, weight=3)
+        left_frame.grid_rowconfigure(1, weight=1)
+        left_frame.grid_columnconfigure(0, weight=1)
+        # Superior: info
         card_info = tk.Frame(left_frame, bg=BG_CARD, bd=0, highlightbackground="#b3c6e6", highlightthickness=1)
-        card_info.pack(fill='x', padx=PAD, pady=(PAD*2, 8))
+        card_info.grid(row=0, column=0, sticky='nsew', padx=PAD, pady=(PAD*2, 8))
         tk.Label(card_info, text=f"Data/Hora: {data}", font=("Arial", 12, "bold"), bg=BG_CARD).pack(anchor='w', padx=16, pady=(12, 2))
         tk.Label(card_info, text="Título:", font=("Arial", 11, "bold"), bg=BG_CARD).pack(anchor='w', padx=16, pady=(8, 0))
         titulo_var = tk.StringVar(value=titulo_ia)
         tk.Entry(card_info, textvariable=titulo_var, font=("Arial", 12), width=60, state='readonly').pack(anchor='w', padx=16, pady=(0, 8))
-        # Transcrição
         tk.Label(card_info, text="Transcrição:", font=("Arial", 11, "bold"), bg=BG_CARD).pack(anchor='w', padx=16, pady=(8, 0))
         txt_transc = tk.Text(card_info, font=("Arial", 12), height=10, wrap='word')
         txt_transc.pack(fill='both', expand=False, padx=16, pady=(0, 8))
         txt_transc.insert('1.0', transcricao)
         txt_transc.config(state='disabled')
-        # Resumo
         tk.Label(card_info, text="Resumo:", font=("Arial", 11, "bold"), bg=BG_CARD).pack(anchor='w', padx=16, pady=(8, 0))
         txt_resumo = tk.Text(card_info, font=("Arial", 12), height=6, wrap='word')
         txt_resumo.pack(fill='both', expand=False, padx=16, pady=(0, 8))
         txt_resumo.insert('1.0', resumo_ia)
         txt_resumo.config(state='disabled')
-        # Pontos
         tk.Label(card_info, text="Principais Pontos:", font=("Arial", 11, "bold"), bg=BG_CARD).pack(anchor='w', padx=16, pady=(8, 0))
         txt_pontos = tk.Text(card_info, font=("Arial", 12), height=8, wrap='word')
         txt_pontos.pack(fill='both', expand=False, padx=16, pady=(0, 16))
         txt_pontos.insert('1.0', '\n'.join(f'- {item}' for item in pontos_ia_lista))
         txt_pontos.config(state='disabled')
-        # Prints
-        tk.Label(left_frame, text="Prints:", font=("Arial", 13, "bold"), bg=BG_MODAL, anchor='w').pack(anchor='w', padx=PAD, pady=(8, 0))
-        frame_imgs = tk.Frame(left_frame, bg=BG_MODAL)
-        frame_imgs.pack(fill='both', expand=True, padx=PAD, pady=(4, PAD))
-        self._detalhes_frame_imgs = frame_imgs
-        self._detalhes_gravacao_dir = gravacao_dir
+        # Inferior: painel de thumbs com rolagem
+        thumbs_frame = tk.Frame(left_frame, bg=BG_MODAL)
+        thumbs_frame.grid(row=1, column=0, sticky='nsew', padx=PAD, pady=(0, PAD))
+        tk.Label(thumbs_frame, text="Prints:", font=("Arial", 13, "bold"), bg=BG_MODAL, anchor='w').pack(anchor='w', padx=2, pady=(0, 2))
+        canvas = tk.Canvas(thumbs_frame, bg=BG_MODAL, highlightthickness=0)
+        scrollbar = tk.Scrollbar(thumbs_frame, orient="vertical", command=canvas.yview)
+        scroll_frame = tk.Frame(canvas, bg=BG_MODAL)
+        scroll_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        # Suporte ao scroll do mouse
+        def _on_mousewheel(event):
+            if event.num == 5 or event.delta == -120:
+                canvas.yview_scroll(1, "units")
+            elif event.num == 4 or event.delta == 120:
+                canvas.yview_scroll(-1, "units")
+        canvas.bind_all("<MouseWheel>", _on_mousewheel)  # Windows/macOS
+        canvas.bind_all("<Button-4>", _on_mousewheel)    # Linux scroll up
+        canvas.bind_all("<Button-5>", _on_mousewheel)    # Linux scroll down
+        # Listar thumbs
+        from glob import glob
+        from PIL import Image, ImageTk
+        prints = glob(os.path.join(gravacao_dir, 'print_*.png'))
+        prints = sorted(prints, key=lambda x: os.path.getctime(x), reverse=True)
         self._detalhes_imgs_refs = []
-        btn_atualizar = tk.Button(frame_imgs, text="Atualizar Prints", command=self._atualizar_aba_prints_grade, font=("Arial", 10))
-        btn_atualizar.pack(anchor='ne', padx=10, pady=5)
-        self._frame_prints_canvas = tk.Frame(frame_imgs, bg=BG_MODAL)
-        self._frame_prints_canvas.pack(fill='both', expand=True)
-        self._atualizar_aba_prints_grade()
+        max_per_row = 3
+        for idx, img_path in enumerate(prints):
+            img = Image.open(img_path)
+            img.thumbnail((180, 120))
+            tk_img = ImageTk.PhotoImage(img)
+            self._detalhes_imgs_refs.append(tk_img)
+            def abrir_full(img_path=img_path):
+                if not hasattr(self, '_modal_print_ref') or self._modal_print_ref is None or not self._modal_print_ref.winfo_exists():
+                    self._modal_print_ref = tk.Toplevel(self.master)
+                self._abrir_modal_print(img_path, reuse_modal=self._modal_print_ref)
+                self._modal_print_ref.deiconify()
+                self._modal_print_ref.lift()
+            frame_thumb = tk.Frame(scroll_frame, bg=BG_MODAL, bd=1, relief="solid")
+            btn = tk.Button(frame_thumb, image=tk_img, command=abrir_full, bg=BG_MODAL, relief="flat")
+            btn.pack()
+            tk.Label(frame_thumb, text=os.path.basename(img_path), font=("Arial", 9), bg=BG_MODAL).pack()
+            row = idx // max_per_row
+            col = idx % max_per_row
+            frame_thumb.grid(row=row, column=col, padx=10, pady=10)
+        if not prints:
+            tk.Label(scroll_frame, text="Nenhum print capturado ainda.", font=("Arial", 12, "italic"), bg=BG_MODAL, fg="#888").pack(pady=30)
         # --- PARTE DIREITA: pergunta IA ---
         frame_pergunta = tk.Frame(right_frame, bg=BG_MODAL)
         frame_pergunta.pack(fill='x', padx=PAD, pady=(PAD*2, 10), anchor='n')
@@ -732,225 +774,14 @@ class RecorderGUI:
             btn_copiar_resp.pack(side='left', padx=(0, 8), ipadx=8, ipady=2)
         set_resposta_markdown("")
         # Função para perguntar à IA e exibir resposta em markdown
-        def perguntar_ia():
+        def perguntar_ia(transcricao_c=transcricao):
             pergunta = pergunta_var.get().strip()
             if not pergunta:
                 set_resposta_markdown("Digite uma pergunta.")
                 return
             btn_perguntar.config(state=tk.DISABLED)
             set_resposta_markdown("Consultando IA...")
-            texto_base = transcricao
-            def run_ia_pergunta():
-                try:
-                    import os
-                    api_key = os.environ.get("GEMINI_API_KEY") or GEMINI_API_KEY
-                    model = GEMINI_MODEL
-                    genai.configure(api_key=api_key)
-                    prompt = f"""Você receberá a transcrição de uma gravação de áudio. Use esse texto como contexto para responder a pergunta do usuário, sempre em português do Brasil. Seja objetivo e claro.\n\nTranscrição:\n{texto_base}\n\nPergunta do usuário:\n{pergunta}\n\nResponda de forma clara, objetiva e, se possível, cite trechos da transcrição que embasam sua resposta. Use markdown bem formatado."""
-                    model = genai.GenerativeModel(GEMINI_MODEL)
-                    response = model.generate_content(prompt)
-                    resposta = response.text.strip()
-                    self.master.after(0, lambda: set_resposta_markdown(resposta))
-                except Exception as e:
-                    msg_erro = str(e)
-                    if len(msg_erro) > 400:
-                        msg_erro = msg_erro[:400] + '\n... (mensagem truncada)'
-                    self.master.after(0, lambda: set_resposta_markdown(f"Erro ao consultar IA: {msg_erro}"))
-                finally:
-                    self.master.after(0, lambda: btn_perguntar.config(state=tk.NORMAL))
-            import threading
-            threading.Thread(target=run_ia_pergunta, daemon=True).start()
-        btn_perguntar.config(command=perguntar_ia)
-
-    def _atualizar_aba_prints_grade(self):
-        import tkinter as tk
-        import os
-        from glob import glob
-        from PIL import Image, ImageTk
-        # Limpa frame
-        for widget in self._frame_prints_canvas.winfo_children():
-            widget.destroy()
-        gravacao_dir = getattr(self, '_detalhes_gravacao_dir', None)
-        if not gravacao_dir:
-            return
-        prints = glob(os.path.join(gravacao_dir, 'print_*.png'))
-        # Ordenar por data de criação (mais recente primeiro)
-        prints = sorted(prints, key=lambda x: os.path.getctime(x), reverse=True)
-        if prints:
-            canvas = tk.Canvas(self._frame_prints_canvas, bg="#f7f7f7", highlightthickness=0)
-            scrollbar = tk.Scrollbar(self._frame_prints_canvas, orient="vertical", command=canvas.yview)
-            scroll_frame = tk.Frame(canvas, bg="#f7f7f7")
-            scroll_frame.bind(
-                "<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-            )
-            canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
-            canvas.configure(yscrollcommand=scrollbar.set)
-            canvas.pack(side="left", fill="both", expand=True)
-            scrollbar.pack(side="right", fill="y")
-            self._detalhes_imgs_refs = []
-            max_per_row = 3
-            # Referência ao modal de print aberto
-            if not hasattr(self, '_modal_print_ref'):
-                self._modal_print_ref = None
-            for idx, img_path in enumerate(prints):
-                img = Image.open(img_path)
-                img.thumbnail((180, 120))
-                tk_img = ImageTk.PhotoImage(img)
-                self._detalhes_imgs_refs.append(tk_img)
-                def abrir_full(img_path=img_path):
-                    # Reutiliza o mesmo modal se já estiver aberto
-                    if self._modal_print_ref is None or not self._modal_print_ref.winfo_exists():
-                        self._modal_print_ref = None
-                        self._modal_print_ref = tk.Toplevel(self.master)
-                    self._abrir_modal_print(img_path, reuse_modal=self._modal_print_ref)
-                    self._modal_print_ref.deiconify()
-                    self._modal_print_ref.lift()
-                frame_thumb = tk.Frame(scroll_frame, bg="#f7f7f7", bd=1, relief="solid")
-                btn = tk.Button(frame_thumb, image=tk_img, command=abrir_full, bg="#f7f7f7", relief="flat")
-                btn.pack()
-                tk.Label(frame_thumb, text=os.path.basename(img_path), font=("Arial", 9), bg="#f7f7f7").pack()
-                row = idx // max_per_row
-                col = idx % max_per_row
-                frame_thumb.grid(row=row, column=col, padx=10, pady=10)
-        else:
-            tk.Label(self._frame_prints_canvas, text="Nenhum print capturado ainda.", font=("Arial", 12, "italic"), bg="#f7f7f7", fg="#888").pack(pady=30)
-
-    def _abrir_modal_print(self, img_path, auto_ia=False, reuse_modal=None):
-        import tkinter as tk
-        from PIL import Image, ImageTk
-        import os
-        # Reutilizar modal se fornecido
-        if reuse_modal is not None:
-            modal = reuse_modal
-            for widget in modal.winfo_children():
-                widget.destroy()
-        else:
-            modal = tk.Toplevel(self.master)
-            modal.title(f"Print: {os.path.basename(img_path)}")
-            modal.geometry(f"{modal.winfo_screenwidth()}x{modal.winfo_screenheight()}+0+0")
-            modal.configure(bg="#f7f7f7")
-            modal.attributes('-fullscreen', True)
-        # Padronização visual
-        PAD = 24
-        BG_CARD = "#e3eafc"
-        BG_MODAL = "#f7f7f7"
-        FG_TITLE = "#222"
-        # Frame principal horizontal
-        main_frame = tk.Frame(modal, bg=BG_MODAL)
-        main_frame.pack(fill='both', expand=True)
-        left_frame = tk.Frame(main_frame, bg=BG_MODAL, width=modal.winfo_screenwidth()//2)
-        left_frame.pack(side='left', fill='both', expand=True)
-        right_frame = tk.Frame(main_frame, bg=BG_MODAL, width=modal.winfo_screenwidth()//2)
-        right_frame.pack(side='right', fill='both', expand=True)
-        # --- PARTE ESQUERDA: Imagem + Resumo IA ---
-        # Título e botão fechar
-        titulo_modal = tk.Label(modal, text="Detalhes do Print", font=("Arial", 18, "bold"), bg=BG_MODAL, fg=FG_TITLE, anchor='w')
-        titulo_modal.place(x=PAD, y=PAD)
-        btn_fechar = tk.Button(modal, text="✕", font=("Arial", 14, "bold"), bg=BG_MODAL, fg="#b71c1c", bd=0, relief='flat', command=modal.destroy, cursor='hand2', highlightthickness=0, activebackground=BG_MODAL)
-        btn_fechar.place(relx=1.0, x=-PAD, y=PAD, anchor='ne')
-        # Imagem
-        img = Image.open(img_path)
-        img.thumbnail((modal.winfo_screenwidth()//2 - 2*PAD, 400))
-        tk_img = ImageTk.PhotoImage(img)
-        lbl_img = tk.Label(left_frame, image=tk_img, bg=BG_MODAL)
-        lbl_img.image = tk_img
-        lbl_img.pack(pady=(PAD*2, 8), padx=PAD, anchor='n')
-        def abrir_imagem_original(event=None):
-            import platform, subprocess, os
-            path_abs = os.path.abspath(img_path)
-            try:
-                if platform.system() == "Linux":
-                    subprocess.Popen(["xdg-open", path_abs], start_new_session=True)
-                elif platform.system() == "Darwin":
-                    subprocess.Popen(["open", path_abs], start_new_session=True)
-                elif platform.system() == "Windows":
-                    os.startfile(path_abs)
-                else:
-                    from tkinter import messagebox
-                    messagebox.showerror("Erro", "Não foi possível abrir a imagem: sistema operacional não suportado.")
-            except Exception as e:
-                from tkinter import messagebox
-                messagebox.showerror("Erro", f"Erro ao abrir a imagem: {e}")
-        lbl_img.bind('<Double-Button-1>', abrir_imagem_original)
-        # Resumo IA (markdown -> HTML)
-        md_path = img_path.replace('.png', '.md')
-        markdown_text = ''
-        if os.path.exists(md_path):
-            with open(md_path, 'r', encoding='utf-8') as f:
-                markdown_text = f.read()
-        tk.Label(left_frame, text="Resumo IA:", font=("Arial", 13, "bold"), bg=BG_MODAL, anchor='w').pack(anchor='w', padx=PAD, pady=(8, 0))
-        card_analise = tk.Frame(left_frame, bg=BG_CARD, bd=0, highlightbackground="#b3c6e6", highlightthickness=1)
-        card_analise.pack(fill='both', expand=True, padx=PAD, pady=(4, PAD))
-        def exibir_analise_markdown(md):
-            for widget in card_analise.winfo_children():
-                widget.destroy()
-            html = md2html(md, extensions=['fenced_code', 'codehilite'])
-            # Adiciona estilo inline para blocos de código
-            html = html.replace('<pre>', '<pre style="background:#f4f4f4;border:1px solid #b3c6e6;padding:8px;border-radius:6px;overflow-x:auto;font-family:monospace;font-size:13px;">')
-            html = html.replace('<code>', '<code style="font-family:monospace;font-size:13px;">')
-            html_frame = HtmlFrame(card_analise, messages_enabled=False, vertical_scrollbar=True)
-            html_frame.load_html(html)
-            html_frame.pack(fill='both', expand=True, padx=18, pady=(12, 0))
-            # Botões (sempre visíveis abaixo do HtmlFrame)
-            btn_frame = tk.Frame(card_analise, bg=BG_CARD)
-            btn_frame.pack(fill='x', padx=18, pady=(8, 10), anchor='s')
-            def copiar_resultado():
-                modal.clipboard_clear()
-                modal.clipboard_append(md)
-                btn_copiar.config(text="Copiado!", bg="#a5d6a7")
-                modal.after(2000, lambda: btn_copiar.config(text="Copiar resultado", bg="#b3c6e6"))
-            btn_copiar = tk.Button(btn_frame, text="Copiar resultado", command=copiar_resultado, font=("Arial", 10), bg="#b3c6e6", relief=tk.RAISED)
-            btn_copiar.pack(side='left', padx=(0, 8), ipadx=8, ipady=2)
-            def reanalisar_ia():
-                self.analisar_ia()
-            btn_reanalisar = tk.Button(btn_frame, text="Reanalisar IA", command=reanalisar_ia, font=("Arial", 10), bg="#1976D2", fg="white", relief=tk.RAISED)
-            btn_reanalisar.pack(side='right', ipadx=8, ipady=2)
-        exibir_analise_markdown(markdown_text)
-        # --- PARTE DIREITA: Pergunta + Resposta IA ---
-        frame_pergunta = tk.Frame(right_frame, bg=BG_MODAL)
-        frame_pergunta.pack(fill='x', padx=PAD, pady=(PAD*2, 10), anchor='n')
-        tk.Label(frame_pergunta, text="Pergunte algo sobre este print:", font=("Arial", 13, "bold"), bg=BG_MODAL).pack(anchor='w', padx=2, pady=(0, 2))
-        pergunta_var = tk.StringVar()
-        entry_pergunta = tk.Entry(frame_pergunta, textvariable=pergunta_var, font=("Arial", 12), width=40)
-        entry_pergunta.pack(side='left', padx=(0, 8), pady=2, fill='x', expand=True)
-        btn_perguntar = tk.Button(frame_pergunta, text="Perguntar", font=("Arial", 11, "bold"), bg="#388E3C", fg="white")
-        btn_perguntar.pack(side='left', ipadx=10, ipady=2)
-        entry_pergunta.bind('<Return>', lambda e: btn_perguntar.invoke())
-        # Resposta IA (markdown)
-        tk.Label(right_frame, text="Resposta da IA:", font=("Arial", 13, "bold"), bg=BG_MODAL, anchor='w').pack(anchor='w', padx=PAD, pady=(8, 0))
-        card_resposta = tk.Frame(right_frame, bg=BG_CARD, bd=0, highlightbackground="#b3c6e6", highlightthickness=1)
-        card_resposta.pack(fill='both', expand=True, padx=PAD, pady=(4, PAD))
-        resposta_markdown = tk.StringVar(value="")
-        def set_resposta_markdown(md):
-            resposta_markdown.set(md)
-            for widget in card_resposta.winfo_children():
-                widget.destroy()
-            html = md2html(md, extensions=['fenced_code', 'codehilite'])
-            html = html.replace('<pre>', '<pre style="background:#f4f4f4;border:1px solid #b3c6e6;padding:8px;border-radius:6px;overflow-x:auto;font-family:monospace;font-size:13px;">')
-            html = html.replace('<code>', '<code style="font-family:monospace;font-size:13px;">')
-            html_frame = HtmlFrame(card_resposta, messages_enabled=False, vertical_scrollbar=True)
-            html_frame.load_html(html)
-            html_frame.pack(fill='both', expand=True, padx=18, pady=(12, 0))
-            # Botão copiar resposta (sempre visível abaixo do HtmlFrame)
-            btn_frame_resposta = tk.Frame(card_resposta, bg=BG_CARD)
-            btn_frame_resposta.pack(fill='x', padx=18, pady=(8, 10), anchor='s')
-            def copiar_resposta():
-                modal.clipboard_clear()
-                modal.clipboard_append(md)
-                btn_copiar_resp.config(text="Copiado!", bg="#a5d6a7")
-                modal.after(2000, lambda: btn_copiar_resp.config(text="Copiar resposta", bg="#b3c6e6"))
-            btn_copiar_resp = tk.Button(btn_frame_resposta, text="Copiar resposta", command=copiar_resposta, font=("Arial", 10), bg="#b3c6e6", relief=tk.RAISED)
-            btn_copiar_resp.pack(side='left', padx=(0, 8), ipadx=8, ipady=2)
-        set_resposta_markdown("")
-        # Função para perguntar à IA e exibir resposta em markdown
-        def perguntar_ia():
-            pergunta = pergunta_var.get().strip()
-            if not pergunta:
-                set_resposta_markdown("Digite uma pergunta.")
-                return
-            btn_perguntar.config(state=tk.DISABLED)
-            set_resposta_markdown("Consultando IA...")
-            texto_base = transcricao
+            texto_base = transcricao_c
             def run_ia_pergunta():
                 try:
                     import os
@@ -1178,6 +1009,80 @@ class RecorderGUI:
         import threading
         t = threading.Thread(target=listen, daemon=True)
         t.start()
+
+    def _abrir_modal_print(self, img_path, reuse_modal=None):
+        import tkinter as tk
+        from PIL import Image, ImageTk
+        import os
+        from markdown import markdown as md2html
+        from tkinterweb import HtmlFrame
+
+        BG_MODAL = "#f7f7f7"
+        BG_CARD = "#e3eafc"
+        PAD = 24
+
+        if reuse_modal and reuse_modal.winfo_exists():
+            modal = reuse_modal
+            for widget in modal.winfo_children():
+                widget.destroy()
+        else:
+            modal = tk.Toplevel(self.master)
+        modal.title(f"Print: {os.path.basename(img_path)}")
+        largura = modal.winfo_screenwidth()
+        altura = modal.winfo_screenheight()
+        modal.geometry(f"{largura}x{altura}+0+0")
+        modal.configure(bg=BG_MODAL)
+
+        # Frame principal dividido em duas colunas
+        main_frame = tk.Frame(modal, bg=BG_MODAL)
+        main_frame.pack(fill='both', expand=True)
+        main_frame.pack_propagate(False)
+
+        # Lado esquerdo (imagem + análise IA)
+        left_frame = tk.Frame(main_frame, bg=BG_MODAL, width=largura//2, height=altura)
+        left_frame.pack(side='left', fill='both', expand=True)
+        left_frame.pack_propagate(False)
+
+        # Lado direito (placeholder)
+        right_frame = tk.Frame(main_frame, bg=BG_MODAL, width=largura//2, height=altura)
+        right_frame.pack(side='right', fill='both', expand=True)
+        right_frame.pack_propagate(False)
+
+        # TOPO ESQUERDO: imagem do print
+        img_frame = tk.Frame(left_frame, bg=BG_MODAL)
+        img_frame.pack(fill='x', padx=PAD, pady=(PAD*2, 8), anchor='n')
+        img = Image.open(img_path)
+        max_w = largura//2 - 2*PAD
+        max_h = int(altura * 0.35)
+        img.thumbnail((max_w, max_h))
+        tk_img = ImageTk.PhotoImage(img)
+        lbl_img = tk.Label(img_frame, image=tk_img, bg=BG_MODAL)
+        lbl_img.image = tk_img
+        lbl_img.pack(anchor='center')
+        tk.Label(img_frame, text=os.path.basename(img_path), font=("Arial", 12, "bold"), bg=BG_MODAL).pack(anchor='center', pady=(4, 0))
+
+        # ABAIXO DA IMAGEM: análise IA (markdown)
+        analise_frame = tk.Frame(left_frame, bg=BG_CARD, bd=0, highlightbackground="#b3c6e6", highlightthickness=1)
+        analise_frame.pack(fill='both', expand=True, padx=PAD, pady=(0, PAD))
+        tk.Label(analise_frame, text="Análise do Print (IA)", font=("Arial", 13, "bold"), bg=BG_CARD).pack(anchor='w', padx=16, pady=(12, 2))
+        md_path = img_path.replace('.png', '.md')
+        resposta_ia = ""
+        if os.path.exists(md_path):
+            with open(md_path, 'r', encoding='utf-8') as f:
+                resposta_ia = f.read()
+        if resposta_ia:
+            html = md2html(resposta_ia, extensions=['fenced_code', 'codehilite'])
+            html = html.replace('<pre>', '<pre style="background:#f4f4f4;border:1px solid #b3c6e6;padding:8px;border-radius:6px;overflow-x:auto;font-family:monospace;font-size:13px;">')
+            html = html.replace('<code>', '<code style="font-family:monospace;font-size:13px;">')
+            html_frame = HtmlFrame(analise_frame, messages_enabled=False, vertical_scrollbar=True)
+            html_frame.load_html(html)
+            html_frame.pack(fill='both', expand=True, padx=18, pady=(0, 8))
+        else:
+            tk.Label(analise_frame, text="Nenhuma análise IA disponível para este print.", font=("Arial", 11, "italic"), bg=BG_CARD, fg="#888").pack(anchor='w', padx=16, pady=(0, 8))
+
+        # DIREITA: apenas texto placeholder
+        placeholder = tk.Label(right_frame, text="Área reservada para interação com IA", font=("Arial", 16, "italic"), bg=BG_MODAL, fg="#888")
+        placeholder.pack(expand=True)
 
 def ajustar_permissao_usuario(path):
     try:
