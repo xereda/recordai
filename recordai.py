@@ -224,6 +224,14 @@ class RecorderGUI:
         self.status.config(text="Gravando... (clique em Encerrar para finalizar)", fg="#1976D2")
         self.gravacao_dir, self.prefix, self.gravacao_timestamp = self.get_output_dir_and_prefix()
         self.filename_base = os.path.join(self.gravacao_dir, f"{self.prefix}")
+        # Cria meta.json temporário para garantir que a gravação apareça na grid
+        meta_path = os.path.join(self.gravacao_dir, 'gravacao_meta.json')
+        try:
+            with open(meta_path, 'w', encoding='utf-8') as f:
+                json.dump({"duracao": "00:00:00", "status": "gravando"}, f, ensure_ascii=False, indent=2)
+            ajustar_permissao_usuario(meta_path)
+        except Exception as e:
+            print(f"[META] Falha ao criar meta inicial: {e}")
         self.mic_device = self.get_default_source()
         self.monitor_device = self.get_default_sink_monitor()
         self.use_mic = self.var_mic.get()
@@ -235,6 +243,16 @@ class RecorderGUI:
         # Mostra o tempo decorrido
         if not self.tempo_decorrido_label.winfo_ismapped():
             self.tempo_decorrido_label.pack(pady=(0, 8))
+        # Atualiza a grid imediatamente e seleciona a gravação em andamento
+        self.refresh_files()
+        grav_dirs = [d for d in os.listdir(self.output_dir) if os.path.isdir(os.path.join(self.output_dir, d))]
+        grav_dirs.sort(reverse=True)
+        if grav_dirs:
+            for row in self.tree.get_children():
+                values = self.tree.item(row)['values']
+                if str(grav_dirs[0]) in str(values):
+                    self.tree.selection_set(row)
+                    break
         self.thread = threading.Thread(target=self._record_in_blocks, daemon=True)
         self.thread.start()
 
@@ -317,12 +335,12 @@ class RecorderGUI:
         gravacao_dirs.sort(reverse=True)
         for grav_dir in gravacao_dirs:
             full_dir = os.path.join(self.output_dir, grav_dir)
+            meta_path = os.path.join(full_dir, 'gravacao_meta.json')
             blocos = [f for f in os.listdir(full_dir) if f.endswith('.ogg')]
             blocos.sort()
-            if not blocos:
-                continue
+            # playlist só se houver blocos
             playlist_path = os.path.join(full_dir, 'playlist.m3u')
-            if not os.path.exists(playlist_path):
+            if blocos and not os.path.exists(playlist_path):
                 with open(playlist_path, 'w', encoding='utf-8') as m3u:
                     m3u.write('#EXTM3U\n')
                     for bloco in blocos:
@@ -331,13 +349,21 @@ class RecorderGUI:
                     ajustar_permissao_usuario(playlist_path)
                 except Exception as e:
                     print(f"[PERMISSAO] Falha ao ajustar permissão do playlist: {e}")
-            try:
-                path_primeiro_bloco = os.path.join(full_dir, blocos[0])
-                dt = datetime.fromtimestamp(os.path.getmtime(path_primeiro_bloco)).strftime('%d/%m/%Y %H:%M:%S')
-            except Exception:
+            # Data/hora: se houver blocos, usa o primeiro bloco; senão, usa o meta.json
+            if blocos:
+                try:
+                    path_primeiro_bloco = os.path.join(full_dir, blocos[0])
+                    dt = datetime.fromtimestamp(os.path.getmtime(path_primeiro_bloco)).strftime('%d/%m/%Y %H:%M:%S')
+                except Exception:
+                    dt = ''
+            elif os.path.exists(meta_path):
+                try:
+                    dt = datetime.fromtimestamp(os.path.getmtime(meta_path)).strftime('%d/%m/%Y %H:%M:%S')
+                except Exception:
+                    dt = ''
+            else:
                 dt = ''
-            # Lê a duração do meta.json, se existir
-            meta_path = os.path.join(full_dir, 'gravacao_meta.json')
+            # Duração: lê do meta.json se existir, senão mostra '?'
             if os.path.exists(meta_path):
                 try:
                     with open(meta_path, 'r', encoding='utf-8') as f:
